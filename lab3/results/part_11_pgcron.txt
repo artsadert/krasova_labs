@@ -1,0 +1,49 @@
+### Расширение и расписание
+                          List of installed extensions
+  Name   | Version | Default version |   Schema   |         Description          
+---------+---------+-----------------+------------+------------------------------
+ pg_cron | 1.6     | 1.6             | pg_catalog | Job scheduler for PostgreSQL
+(1 row)
+
+ jobid |      jobname       | schedule  | active | database 
+-------+--------------------+-----------+--------+----------
+     1 | partitions-events  | * * * * * | t      | postgres
+     2 | partitions-rentals | * * * * * | t      | postgres
+(2 rows)
+
+
+### Самовосстановление: партиция удалена, pg_cron вернул её за минуту
+       ran_at        |        target        | created |      details      
+---------------------+----------------------+---------+-------------------
+ 2026-09-12 11:56:00 | krasova_lab3.events  |       1 | events_2026_09_15
+ 2026-09-12 11:53:00 | carrent_lab3.rentals |       1 | rentals_2026_11
+(2 rows)
+
+### Журнал самого pg_cron
+ jobid |  status   | return_message |     start_time      
+-------+-----------+----------------+---------------------
+     1 | succeeded | 1 row          | 2026-09-12 11:56:00
+     2 | succeeded | 1 row          | 2026-09-12 11:56:00
+     1 | succeeded | 1 row          | 2026-09-12 11:55:00
+     2 | succeeded | 1 row          | 2026-09-12 11:55:00
+     1 | succeeded | 1 row          | 2026-09-12 11:54:00
+     2 | succeeded | 1 row          | 2026-09-12 11:54:00
+(6 rows)
+
+### Очередь уведомлений после доставки
+ id | severity |        target        |       sent_at       
+----+----------+----------------------+---------------------
+  1 | OK       | carrent_lab3.rentals | 2026-09-12 11:53:56
+  2 | OK       | krasova_lab3.events  | 2026-09-12 11:56:13
+(2 rows)
+
+
+### Данные и расписание переживают пересоздание контейнера
+          t           |  count   
+----------------------+----------
+ carrent_lab2.rentals |  5000000
+ carrent_lab3.rentals |  1504816
+ krasova_lab2.events  | 10200000
+ krasova_lab3.events  |  3000032
+(4 rows)
+

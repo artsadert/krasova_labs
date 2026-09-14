@@ -1,0 +1,133 @@
+### Сборка и запуск
+$ docker compose --env-file ./.env up -d partition_alerts
+
+### Полный лог контейнера: старт, сбой, alert, подавление, восстановление
+2026-09-12 14:23:57  [scheduler] старт. JOB_INTERVAL=600s, CHECK_INTERVAL=30s
+2026-09-12 14:23:57  [scheduler] наблюдаем krasova_lab3.events (day, горизонт 3)
+2026-09-12 14:23:57  [scheduler] наблюдаем carrent_lab3.rentals (month, горизонт 2)
+2026-09-12 14:23:57  [scheduler] канал уведомлений: telegram
+2026-09-12 14:23:57  [scheduler] CreatePartitionsJob -> krasova_lab3.events
+    2026-09-12 14:23:57  Partition job started.
+    2026-09-12 14:23:57  Table: events, today: 2026-09-12, horizon: 3 day(s)
+    2026-09-12 14:23:57  Existing partitions: 7
+    2026-09-12 14:23:57  Required partitions: 4
+    2026-09-12 14:23:57  Missing partitions: 0
+    2026-09-12 14:23:57  Nothing to create — all required partitions already exist.
+    2026-09-12 14:23:57  Partition job finished.
+2026-09-12 14:23:57  [scheduler] CreatePartitionsJob -> carrent_lab3.rentals
+    2026-09-12 14:23:58  Partition job started.
+    2026-09-12 14:23:58  Table: rentals, today: 2026-09-12, horizon: 2 month(s)
+    2026-09-12 14:23:58  Existing partitions: 9
+    2026-09-12 14:23:58  Required partitions: 3
+    2026-09-12 14:23:58  Missing partitions: 0
+    2026-09-12 14:23:58  Nothing to create — all required partitions already exist.
+    2026-09-12 14:23:58  Partition job finished.
+2026-09-12 14:23:58  [scheduler] PartitionHealthCheck -> krasova_lab3.events
+    2026-09-12 14:23:58  PartitionHealthCheck: table=events, today=2026-09-12, horizon=3 day(s)
+        events_2026_09_12  ok
+        events_2026_09_13  ok
+        events_2026_09_14  ok
+        events_2026_09_15  ok
+        Result: OK
+        Уведомление не отправлено: всё в порядке, уведомлять не о чем
+2026-09-12 14:23:58  [scheduler] PartitionHealthCheck -> carrent_lab3.rentals
+    2026-09-12 14:23:59  PartitionHealthCheck: table=rentals, today=2026-09-12, horizon=2 month(s)
+        rentals_2026_09  ok
+        rentals_2026_10  ok
+        rentals_2026_11  ok
+        Result: OK
+        Уведомление не отправлено: всё в порядке, уведомлять не о чем
+2026-09-12 14:24:29  [scheduler] PartitionHealthCheck -> krasova_lab3.events
+    2026-09-12 14:24:29  PartitionHealthCheck: table=events, today=2026-09-12, horizon=3 day(s)
+        events_2026_09_12  ok
+        events_2026_09_13  ok
+        events_2026_09_14  ok
+        events_2026_09_15  MISSING
+        Result: CRITICAL
+        Уведомление (alert):
+          telegram: telegram HTTP 200
+2026-09-12 14:24:29  [scheduler] состояние events: CRITICAL
+2026-09-12 14:24:29  [scheduler] PartitionHealthCheck -> carrent_lab3.rentals
+    2026-09-12 14:24:30  PartitionHealthCheck: table=rentals, today=2026-09-12, horizon=2 month(s)
+        rentals_2026_09  ok
+        rentals_2026_10  ok
+        rentals_2026_11  ok
+        Result: OK
+        Уведомление не отправлено: всё в порядке, уведомлять не о чем
+2026-09-12 14:25:00  [scheduler] PartitionHealthCheck -> krasova_lab3.events
+    2026-09-12 14:25:00  PartitionHealthCheck: table=events, today=2026-09-12, horizon=3 day(s)
+        events_2026_09_12  ok
+        events_2026_09_13  ok
+        events_2026_09_14  ok
+        events_2026_09_15  MISSING
+        Result: CRITICAL
+        Уведомление не отправлено: состояние не изменилось — alert подавлен
+2026-09-12 14:25:00  [scheduler] состояние events: CRITICAL
+2026-09-12 14:25:00  [scheduler] PartitionHealthCheck -> carrent_lab3.rentals
+    2026-09-12 14:25:01  PartitionHealthCheck: table=rentals, today=2026-09-12, horizon=2 month(s)
+        rentals_2026_09  ok
+        rentals_2026_10  ok
+        rentals_2026_11  ok
+        Result: OK
+        Уведомление не отправлено: всё в порядке, уведомлять не о чем
+2026-09-12 14:25:31  [scheduler] PartitionHealthCheck -> krasova_lab3.events
+    2026-09-12 14:25:31  PartitionHealthCheck: table=events, today=2026-09-12, horizon=3 day(s)
+        events_2026_09_12  ok
+        events_2026_09_13  ok
+        events_2026_09_14  ok
+        events_2026_09_15  MISSING
+        Result: CRITICAL
+        Уведомление не отправлено: состояние не изменилось — alert подавлен
+2026-09-12 14:25:31  [scheduler] состояние events: CRITICAL
+2026-09-12 14:25:31  [scheduler] PartitionHealthCheck -> carrent_lab3.rentals
+    2026-09-12 14:25:32  PartitionHealthCheck: table=rentals, today=2026-09-12, horizon=2 month(s)
+        rentals_2026_09  ok
+        rentals_2026_10  ok
+        rentals_2026_11  ok
+        Result: OK
+        Уведомление не отправлено: всё в порядке, уведомлять не о чем
+2026-09-12 14:26:02  [scheduler] PartitionHealthCheck -> krasova_lab3.events
+    2026-09-12 14:26:02  PartitionHealthCheck: table=events, today=2026-09-12, horizon=3 day(s)
+        events_2026_09_12  ok
+        events_2026_09_13  ok
+        events_2026_09_14  ok
+        events_2026_09_15  ok
+        Result: OK
+        Уведомление (recovery):
+          telegram: telegram HTTP 200
+2026-09-12 14:26:03  [scheduler] PartitionHealthCheck -> carrent_lab3.rentals
+    2026-09-12 14:26:03  PartitionHealthCheck: table=rentals, today=2026-09-12, horizon=2 month(s)
+        rentals_2026_09  ok
+        rentals_2026_10  ok
+        rentals_2026_11  ok
+        Result: OK
+        Уведомление не отправлено: всё в порядке, уведомлять не о чем
+2026-09-12 14:26:33  [scheduler] PartitionHealthCheck -> krasova_lab3.events
+    2026-09-12 14:26:34  PartitionHealthCheck: table=events, today=2026-09-12, horizon=3 day(s)
+        events_2026_09_12  ok
+        events_2026_09_13  ok
+        events_2026_09_14  ok
+        events_2026_09_15  ok
+        Result: OK
+        Уведомление не отправлено: всё в порядке, уведомлять не о чем
+2026-09-12 14:26:34  [scheduler] PartitionHealthCheck -> carrent_lab3.rentals
+    2026-09-12 14:26:34  PartitionHealthCheck: table=rentals, today=2026-09-12, horizon=2 month(s)
+        rentals_2026_09  ok
+        rentals_2026_10  ok
+        rentals_2026_11  ok
+        Result: OK
+        Уведомление не отправлено: всё в порядке, уведомлять не о чем
+
+### Состояние в томе
+total 8
+-rw-r--r-- 1 partitions partitions 115 Sep 12 14:26 alert_state_carrent_lab3_rentals.json
+-rw-r--r-- 1 partitions partitions 129 Sep 12 14:26 alert_state_krasova_lab3_events.json
+{
+  "events:day": {
+    "status": "OK",
+    "last_alert_at": "2026-09-12T14:26:02",
+    "checked_at": "2026-09-12T14:26:34"
+  }
+}
+### Статус healthcheck
+health: healthy

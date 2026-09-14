@@ -1,0 +1,600 @@
+@@@ p1.structure
+--- SQL
+\d+ events
+--- OUT
+                                             Partitioned table "krasova_lab3.events"
+   Column   |            Type             | Collation | Nullable | Default | Storage  | Compression | Stats target | Description 
+------------+-----------------------------+-----------+----------+---------+----------+-------------+--------------+-------------
+ id         | bigint                      |           | not null |         | plain    |             |              | 
+ user_id    | bigint                      |           | not null |         | plain    |             |              | 
+ event_type | character varying(50)       |           | not null |         | extended |             |              | 
+ payload    | text                        |           |          |         | extended |             |              | 
+ created_at | timestamp without time zone |           | not null |         | plain    |             |              | 
+Partition key: RANGE (created_at)
+Not-null constraints:
+    "events_id_not_null" NOT NULL "id"
+    "events_user_id_not_null" NOT NULL "user_id"
+    "events_event_type_not_null" NOT NULL "event_type"
+    "events_created_at_not_null" NOT NULL "created_at"
+Partitions: events_2026_09_09 FOR VALUES FROM ('2026-09-09 00:00:00') TO ('2026-09-10 00:00:00'),
+            events_2026_09_10 FOR VALUES FROM ('2026-09-10 00:00:00') TO ('2026-09-11 00:00:00'),
+            events_2026_09_11 FOR VALUES FROM ('2026-09-11 00:00:00') TO ('2026-09-12 00:00:00')
+
+
+@@@ p1.fill
+--- SQL
+INSERT INTO events (id, user_id, event_type, payload, created_at)
+SELECT i,
+       (random() * 100000)::bigint,
+       (ARRAY['click','view','login','purchase','logout'])[1 + (i % 5)],
+       'payload-' || i,
+       TIMESTAMP '2026-09-09' + ((i % 3) || ' days')::interval
+                              + ((random() * 86399)::int || ' seconds')::interval
+FROM generate_series(1, 3000000) AS i;
+-- гарантируем наличие пользователя 12345 в каждой партиции
+INSERT INTO events (id, user_id, event_type, payload, created_at)
+SELECT 9000000 + i, 12345, 'click', 'vip', 
+       TIMESTAMP '2026-09-09' + ((i % 3) || ' days')::interval + ((i * 37 % 86399) || ' seconds')::interval
+FROM generate_series(1, 30) AS i;
+ANALYZE events;
+--- OUT
+
+@@@ p1.distribution
+--- SQL
+SELECT tableoid::regclass AS partition_name, COUNT(*)
+FROM events GROUP BY tableoid ORDER BY partition_name;
+--- OUT
+  partition_name   |  count  
+-------------------+---------
+ events_2026_09_09 | 1000010
+ events_2026_09_10 | 1000010
+ events_2026_09_11 | 1000010
+(3 rows)
+
+
+@@@ p1.q1_boundary
+--- SQL
+SELECT tableoid::regclass AS partition_name, created_at
+FROM events WHERE created_at = TIMESTAMP '2026-09-10 12:00:00' LIMIT 1;
+--- OUT
+  partition_name   |     created_at      
+-------------------+---------------------
+ events_2026_09_10 | 2026-09-10 12:00:00
+(1 row)
+
+
+@@@ p1.q1_probe
+--- SQL
+INSERT INTO events VALUES (99000001, 1, 'probe', 'p', '2026-09-10 12:00:00');
+INSERT INTO events VALUES (99000002, 1, 'probe', 'p', '2026-09-11 00:00:00');
+SELECT id, tableoid::regclass AS partition_name, created_at
+FROM events WHERE id IN (99000001, 99000002) ORDER BY id;
+--- OUT
+    id    |  partition_name   |     created_at      
+----------+-------------------+---------------------
+ 99000001 | events_2026_09_10 | 2026-09-10 12:00:00
+ 99000002 | events_2026_09_11 | 2026-09-11 00:00:00
+(2 rows)
+
+
+@@@ p1.q3_out_of_range
+--- SQL
+INSERT INTO events VALUES (99000003, 1, 'probe', 'p', '2026-09-12 10:00:00');
+--- OUT
+ERROR:  no partition of relation "events" found for row
+DETAIL:  Partition key of the failing row contains (created_at) = (2026-09-12 10:00:00).
+
+@@@ p1.boundaries
+--- SQL
+SELECT c.relname AS partition, pg_get_expr(c.relpartbound, c.oid) AS bounds
+FROM pg_class c
+JOIN pg_inherits i ON i.inhrelid = c.oid
+JOIN pg_class p ON p.oid = i.inhparent
+WHERE p.relname = 'events' ORDER BY c.relname;
+--- OUT
+     partition     |                               bounds                               
+-------------------+--------------------------------------------------------------------
+ events_2026_09_09 | FOR VALUES FROM ('2026-09-09 00:00:00') TO ('2026-09-10 00:00:00')
+ events_2026_09_10 | FOR VALUES FROM ('2026-09-10 00:00:00') TO ('2026-09-11 00:00:00')
+ events_2026_09_11 | FOR VALUES FROM ('2026-09-11 00:00:00') TO ('2026-09-12 00:00:00')
+(3 rows)
+
+
+@@@ p2.pruning_by_date
+--- SQL
+EXPLAIN (ANALYZE, BUFFERS)
+SELECT COUNT(*) FROM events
+WHERE created_at >= '2026-09-10' AND created_at < '2026-09-11';
+--- OUT
+                                                                               QUERY PLAN                                                                               
+------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ Finalize Aggregate  (cost=17756.75..17756.76 rows=1 width=8) (actual time=72.532..79.805 rows=1.00 loops=1)
+   Buffers: shared hit=5575 read=3890 written=182
+   ->  Gather  (cost=17756.53..17756.74 rows=2 width=8) (actual time=70.203..79.791 rows=3.00 loops=1)
+         Workers Planned: 2
+         Workers Launched: 2
+         Buffers: shared hit=5575 read=3890 written=182
+         ->  Partial Aggregate  (cost=16756.53..16756.54 rows=1 width=8) (actual time=66.940..66.942 rows=1.00 loops=3)
+               Buffers: shared hit=5575 read=3890 written=182
+               ->  Parallel Seq Scan on events_2026_09_10 events  (cost=0.00..15715.06 rows=416588 width=0) (actual time=0.131..48.361 rows=333337.00 loops=3)
+                     Filter: ((created_at >= '2026-09-10 00:00:00'::timestamp without time zone) AND (created_at < '2026-09-11 00:00:00'::timestamp without time zone))
+                     Buffers: shared hit=5575 read=3890 written=182
+ Planning:
+   Buffers: shared hit=116
+ Planning Time: 0.824 ms
+ Execution Time: 79.892 ms
+(15 rows)
+
+
+@@@ p2.no_pruning
+--- SQL
+EXPLAIN (ANALYZE, BUFFERS)
+SELECT COUNT(*) FROM events WHERE event_type = 'click';
+--- OUT
+                                                                              QUERY PLAN                                                                              
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ Finalize Aggregate  (cost=46917.06..46917.07 rows=1 width=8) (actual time=126.961..133.070 rows=1.00 loops=1)
+   Buffers: shared hit=15905 read=12490 written=277
+   ->  Gather  (cost=46916.85..46917.06 rows=2 width=8) (actual time=126.800..133.062 rows=3.00 loops=1)
+         Workers Planned: 2
+         Workers Launched: 2
+         Buffers: shared hit=15905 read=12490 written=277
+         ->  Partial Aggregate  (cost=45916.85..45916.86 rows=1 width=8) (actual time=122.645..122.647 rows=1.00 loops=3)
+               Buffers: shared hit=15905 read=12490 written=277
+               ->  Parallel Append  (cost=0.00..45284.62 rows=252892 width=0) (actual time=0.446..110.791 rows=200010.00 loops=3)
+                     Buffers: shared hit=15905 read=12490 written=277
+                     ->  Parallel Seq Scan on events_2026_09_09 events_1  (cost=0.00..14673.39 rows=85668 width=0) (actual time=0.193..32.866 rows=66670.00 loops=3)
+                           Filter: ((event_type)::text = 'click'::text)
+                           Rows Removed by Filter: 266667
+                           Buffers: shared hit=4895 read=4570 written=94
+                     ->  Parallel Seq Scan on events_2026_09_10 events_2  (cost=0.00..14673.39 rows=82862 width=0) (actual time=0.034..90.260 rows=200010.00 loops=1)
+                           Filter: ((event_type)::text = 'click'::text)
+                           Rows Removed by Filter: 800001
+                           Buffers: shared hit=5859 read=3606 written=94
+                     ->  Parallel Seq Scan on events_2026_09_11 events_3  (cost=0.00..14673.39 rows=84362 width=0) (actual time=0.370..49.121 rows=100005.00 loops=2)
+                           Filter: ((event_type)::text = 'click'::text)
+                           Rows Removed by Filter: 400000
+                           Buffers: shared hit=5151 read=4314 written=89
+ Planning:
+   Buffers: shared hit=126
+ Planning Time: 0.881 ms
+ Execution Time: 133.209 ms
+(26 rows)
+
+
+@@@ p3.fill
+--- SQL
+INSERT INTO products (id, name, price) VALUES
+ (1,'Ручка', 25.00), (2,'Тетрадь', 99.99), (3,'Наушники', 100.00),
+ (4,'Клавиатура', 450.00), (5,'Монитор', 999.99), (6,'Ноутбук', 1000.00),
+ (7,'Сервер', 25000.00);
+ANALYZE products;
+--- OUT
+
+@@@ p3.distribution
+--- SQL
+SELECT tableoid::regclass AS partition_name, count(*), min(price), max(price)
+FROM products GROUP BY tableoid ORDER BY partition_name;
+--- OUT
+   partition_name   | count |   min   |   max    
+--------------------+-------+---------+----------
+ products_cheap     |     2 |   25.00 |    99.99
+ products_medium    |     3 |  100.00 |   999.99
+ products_expensive |     2 | 1000.00 | 25000.00
+(3 rows)
+
+
+@@@ p3.pruning
+--- SQL
+EXPLAIN (ANALYZE, BUFFERS)
+SELECT * FROM products WHERE price >= 100 AND price < 500;
+--- OUT
+                                                      QUERY PLAN                                                      
+----------------------------------------------------------------------------------------------------------------------
+ Seq Scan on products_medium products  (cost=0.00..1.04 rows=1 width=30) (actual time=0.010..0.012 rows=2.00 loops=1)
+   Filter: ((price >= '100'::numeric) AND (price < '500'::numeric))
+   Rows Removed by Filter: 1
+   Buffers: shared hit=1
+ Planning:
+   Buffers: shared hit=115
+ Planning Time: 0.476 ms
+ Execution Time: 0.026 ms
+(8 rows)
+
+
+@@@ p4.fill
+--- SQL
+INSERT INTO customers (id, name, customer_type)
+SELECT i, 'Client ' || i,
+       (ARRAY['B2C','B2B','Enterprise'])[1 + (i % 3)]
+FROM generate_series(1, 30000) AS i;
+ANALYZE customers;
+--- OUT
+
+@@@ p4.distribution
+--- SQL
+SELECT tableoid::regclass AS partition_name, COUNT(*)
+FROM customers GROUP BY tableoid ORDER BY partition_name;
+--- OUT
+    partition_name    | count 
+----------------------+-------
+ customers_b2c        | 10000
+ customers_b2b        | 10000
+ customers_enterprise | 10000
+(3 rows)
+
+
+@@@ p4.pruning
+--- SQL
+EXPLAIN (ANALYZE, BUFFERS)
+SELECT * FROM customers WHERE customer_type = 'B2B';
+--- OUT
+                                                          QUERY PLAN                                                           
+-------------------------------------------------------------------------------------------------------------------------------
+ Seq Scan on customers_b2b customers  (cost=0.00..196.00 rows=10000 width=24) (actual time=0.019..1.753 rows=10000.00 loops=1)
+   Filter: ((customer_type)::text = 'B2B'::text)
+   Buffers: shared hit=71
+ Planning:
+   Buffers: shared hit=91
+ Planning Time: 0.586 ms
+ Execution Time: 2.341 ms
+(7 rows)
+
+
+@@@ p5.insert_vip_fail
+--- SQL
+INSERT INTO customers VALUES (100, 'Test User', 'VIP');
+--- OUT
+ERROR:  no partition of relation "customers" found for row
+DETAIL:  Partition key of the failing row contains (customer_type) = (VIP).
+
+@@@ p5.create_default
+--- SQL
+CREATE TABLE customers_default PARTITION OF customers DEFAULT;
+--- OUT
+
+@@@ p5.insert_vip_ok
+--- SQL
+INSERT INTO customers VALUES (100, 'Test User', 'VIP');
+SELECT id, name, customer_type, tableoid::regclass AS partition_name
+FROM customers WHERE id = 100;
+--- OUT
+ id  |    name    | customer_type |  partition_name   
+-----+------------+---------------+-------------------
+ 100 | Client 100 | B2B           | customers_b2b
+ 100 | Test User  | VIP           | customers_default
+(2 rows)
+
+
+@@@ p5.default_blocks_new
+--- SQL
+CREATE TABLE customers_vip PARTITION OF customers FOR VALUES IN ('VIP');
+--- OUT
+ERROR:  updated partition constraint for default partition "customers_default" would be violated by some row
+
+@@@ p6.fill
+--- SQL
+INSERT INTO user_events (id, user_id, event_type, created_at)
+SELECT i, (random() * 1000000)::bigint, 'evt', NOW()
+FROM generate_series(1, 1000000) AS i;
+ANALYZE user_events;
+--- OUT
+
+@@@ p6.distribution
+--- SQL
+SELECT tableoid::regclass AS partition_name, COUNT(*),
+       round(100.0 * COUNT(*) / SUM(COUNT(*)) OVER (), 2) AS pct
+FROM user_events GROUP BY tableoid ORDER BY partition_name;
+--- OUT
+ partition_name | count  |  pct  
+----------------+--------+-------
+ user_events_0  | 249361 | 24.94
+ user_events_1  | 250392 | 25.04
+ user_events_2  | 250071 | 25.01
+ user_events_3  | 250176 | 25.02
+(4 rows)
+
+
+@@@ p6.pruning_by_user
+--- SQL
+EXPLAIN (ANALYZE, BUFFERS)
+SELECT * FROM user_events WHERE user_id = 555;
+--- OUT
+                                                                QUERY PLAN                                                                 
+-------------------------------------------------------------------------------------------------------------------------------------------
+ Gather  (cost=1000.00..4683.32 rows=2 width=28) (actual time=16.326..19.285 rows=0.00 loops=1)
+   Workers Planned: 1
+   Workers Launched: 1
+   Buffers: shared hit=1842
+   ->  Parallel Seq Scan on user_events_1 user_events  (cost=0.00..3683.12 rows=1 width=28) (actual time=13.747..13.748 rows=0.00 loops=2)
+         Filter: (user_id = 555)
+         Rows Removed by Filter: 125196
+         Buffers: shared hit=1842
+ Planning:
+   Buffers: shared hit=93
+ Planning Time: 0.538 ms
+ Execution Time: 19.365 ms
+(12 rows)
+
+
+@@@ p6.no_pruning_by_date
+--- SQL
+EXPLAIN (ANALYZE, BUFFERS)
+SELECT COUNT(*) FROM user_events WHERE created_at >= NOW() - INTERVAL '1 day';
+--- OUT
+                                                                              QUERY PLAN                                                                               
+-----------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ Finalize Aggregate  (cost=21774.34..21774.35 rows=1 width=8) (actual time=130.449..135.278 rows=1.00 loops=1)
+   Buffers: shared hit=7355
+   ->  Gather  (cost=21774.12..21774.33 rows=2 width=8) (actual time=130.359..135.270 rows=3.00 loops=1)
+         Workers Planned: 2
+         Workers Launched: 2
+         Buffers: shared hit=7355
+         ->  Partial Aggregate  (cost=20774.12..20774.13 rows=1 width=8) (actual time=126.649..126.651 rows=1.00 loops=3)
+               Buffers: shared hit=7355
+               ->  Parallel Append  (cost=0.00..19732.45 rows=416667 width=0) (actual time=0.015..108.086 rows=333333.33 loops=3)
+                     Buffers: shared hit=7355
+                     ->  Parallel Seq Scan on user_events_1 user_events_2  (cost=0.00..4419.56 rows=147289 width=0) (actual time=0.014..64.478 rows=250392.00 loops=1)
+                           Filter: (created_at >= (now() - '1 day'::interval))
+                           Buffers: shared hit=1842
+                     ->  Parallel Seq Scan on user_events_3 user_events_4  (cost=0.00..4415.34 rows=147162 width=0) (actual time=0.016..65.888 rows=250176.00 loops=1)
+                           Filter: (created_at >= (now() - '1 day'::interval))
+                           Buffers: shared hit=1840
+                     ->  Parallel Seq Scan on user_events_2 user_events_3  (cost=0.00..4413.26 rows=147101 width=0) (actual time=0.006..19.186 rows=83357.00 loops=3)
+                           Filter: (created_at >= (now() - '1 day'::interval))
+                           Buffers: shared hit=1839
+                     ->  Parallel Seq Scan on user_events_0 user_events_1  (cost=0.00..4400.95 rows=146683 width=0) (actual time=0.013..65.199 rows=249361.00 loops=1)
+                           Filter: (created_at >= (now() - '1 day'::interval))
+                           Buffers: shared hit=1834
+ Planning:
+   Buffers: shared hit=123
+ Planning Time: 0.724 ms
+ Execution Time: 135.378 ms
+(26 rows)
+
+
+@@@ p8.create_index
+--- SQL
+CREATE INDEX idx_events_user_id ON events (user_id);
+--- OUT
+
+@@@ p8.index_hierarchy
+--- SQL
+SELECT c.relname AS index_name, c.relispartition AS is_partition_index,
+       t.relname AS on_table
+FROM pg_class c
+JOIN pg_index ix ON ix.indexrelid = c.oid
+JOIN pg_class t ON t.oid = ix.indrelid
+JOIN pg_namespace n ON n.oid = c.relnamespace
+WHERE n.nspname = 'krasova_lab3' AND c.relname LIKE '%user_id%'
+ORDER BY c.relname;
+--- OUT
+          index_name           | is_partition_index |     on_table      
+-------------------------------+--------------------+-------------------
+ events_2026_09_09_user_id_idx | t                  | events_2026_09_09
+ events_2026_09_10_user_id_idx | t                  | events_2026_09_10
+ events_2026_09_11_user_id_idx | t                  | events_2026_09_11
+ idx_events_user_id            | f                  | events
+(4 rows)
+
+
+@@@ p8.pruning_plus_index
+--- SQL
+EXPLAIN (ANALYZE, BUFFERS)
+SELECT * FROM events
+WHERE created_at >= '2026-09-10' AND created_at < '2026-09-11' AND user_id = 12345;
+--- OUT
+                                                                      QUERY PLAN                                                                      
+------------------------------------------------------------------------------------------------------------------------------------------------------
+ Bitmap Heap Scan on events_2026_09_10 events  (cost=4.51..47.58 rows=11 width=45) (actual time=0.073..0.148 rows=27.00 loops=1)
+   Recheck Cond: (user_id = 12345)
+   Filter: ((created_at >= '2026-09-10 00:00:00'::timestamp without time zone) AND (created_at < '2026-09-11 00:00:00'::timestamp without time zone))
+   Heap Blocks: exact=18
+   Buffers: shared hit=24
+   ->  Bitmap Index Scan on events_2026_09_10_user_id_idx  (cost=0.00..4.51 rows=11 width=0) (actual time=0.046..0.047 rows=27.00 loops=1)
+         Index Cond: (user_id = 12345)
+         Index Searches: 1
+         Buffers: shared hit=6
+ Planning:
+   Buffers: shared hit=174
+ Planning Time: 1.840 ms
+ Execution Time: 0.247 ms
+(13 rows)
+
+
+@@@ p8.index_without_pruning
+--- SQL
+EXPLAIN (ANALYZE, BUFFERS)
+SELECT * FROM events WHERE user_id = 12345;
+--- OUT
+                                                                   QUERY PLAN                                                                    
+-------------------------------------------------------------------------------------------------------------------------------------------------
+ Append  (cost=4.51..142.73 rows=33 width=45) (actual time=0.040..0.210 rows=63.00 loops=1)
+   Buffers: shared hit=48
+   ->  Bitmap Heap Scan on events_2026_09_09 events_1  (cost=4.51..47.52 rows=11 width=45) (actual time=0.039..0.065 rows=16.00 loops=1)
+         Recheck Cond: (user_id = 12345)
+         Heap Blocks: exact=7
+         Buffers: shared hit=13
+         ->  Bitmap Index Scan on events_2026_09_09_user_id_idx  (cost=0.00..4.51 rows=11 width=0) (actual time=0.028..0.028 rows=16.00 loops=1)
+               Index Cond: (user_id = 12345)
+               Index Searches: 1
+               Buffers: shared hit=6
+   ->  Bitmap Heap Scan on events_2026_09_10 events_2  (cost=4.51..47.52 rows=11 width=45) (actual time=0.033..0.089 rows=27.00 loops=1)
+         Recheck Cond: (user_id = 12345)
+         Heap Blocks: exact=18
+         Buffers: shared hit=21
+         ->  Bitmap Index Scan on events_2026_09_10_user_id_idx  (cost=0.00..4.51 rows=11 width=0) (actual time=0.020..0.020 rows=27.00 loops=1)
+               Index Cond: (user_id = 12345)
+               Index Searches: 1
+               Buffers: shared hit=3
+   ->  Bitmap Heap Scan on events_2026_09_11 events_3  (cost=4.51..47.52 rows=11 width=45) (actual time=0.025..0.048 rows=20.00 loops=1)
+         Recheck Cond: (user_id = 12345)
+         Heap Blocks: exact=11
+         Buffers: shared hit=14
+         ->  Bitmap Index Scan on events_2026_09_11_user_id_idx  (cost=0.00..4.51 rows=11 width=0) (actual time=0.015..0.015 rows=20.00 loops=1)
+               Index Cond: (user_id = 12345)
+               Index Searches: 1
+               Buffers: shared hit=3
+ Planning:
+   Buffers: shared hit=231
+ Planning Time: 0.858 ms
+ Execution Time: 0.320 ms
+(30 rows)
+
+
+@@@ p9.before_index
+--- SQL
+EXPLAIN (ANALYZE, BUFFERS)
+SELECT COUNT(*) FROM events WHERE event_type = 'click';
+--- OUT
+                                                                              QUERY PLAN                                                                              
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ Finalize Aggregate  (cost=46917.07..46917.08 rows=1 width=8) (actual time=122.007..127.204 rows=1.00 loops=1)
+   Buffers: shared hit=8239 read=20156
+   ->  Gather  (cost=46916.86..46917.07 rows=2 width=8) (actual time=121.885..127.195 rows=3.00 loops=1)
+         Workers Planned: 2
+         Workers Launched: 2
+         Buffers: shared hit=8239 read=20156
+         ->  Partial Aggregate  (cost=45916.86..45916.87 rows=1 width=8) (actual time=118.046..118.049 rows=1.00 loops=3)
+               Buffers: shared hit=8239 read=20156
+               ->  Parallel Append  (cost=0.00..45284.63 rows=252892 width=0) (actual time=0.181..106.292 rows=200010.00 loops=3)
+                     Buffers: shared hit=8239 read=20156
+                     ->  Parallel Seq Scan on events_2026_09_10 events_2  (cost=0.00..14673.39 rows=82862 width=0) (actual time=0.013..30.458 rows=66670.00 loops=3)
+                           Filter: ((event_type)::text = 'click'::text)
+                           Rows Removed by Filter: 266667
+                           Buffers: shared hit=3330 read=6135
+                     ->  Parallel Seq Scan on events_2026_09_11 events_3  (cost=0.00..14673.39 rows=84362 width=0) (actual time=0.108..45.758 rows=100005.00 loops=2)
+                           Filter: ((event_type)::text = 'click'::text)
+                           Rows Removed by Filter: 400000
+                           Buffers: shared hit=2553 read=6912
+                     ->  Parallel Seq Scan on events_2026_09_09 events_1  (cost=0.00..14673.39 rows=85668 width=0) (actual time=0.304..91.560 rows=200010.00 loops=1)
+                           Filter: ((event_type)::text = 'click'::text)
+                           Rows Removed by Filter: 800000
+                           Buffers: shared hit=2356 read=7109
+ Planning:
+   Buffers: shared hit=198
+ Planning Time: 0.683 ms
+ Execution Time: 127.319 ms
+(26 rows)
+
+
+@@@ p9.create_index
+--- SQL
+CREATE INDEX idx_events_event_type ON events (event_type);
+--- OUT
+
+@@@ p9.after_index
+--- SQL
+EXPLAIN (ANALYZE, BUFFERS)
+SELECT COUNT(*) FROM events WHERE event_type = 'click';
+--- OUT
+                                                                                    QUERY PLAN                                                                                     
+-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ Finalize Aggregate  (cost=41234.11..41234.12 rows=1 width=8) (actual time=120.107..124.594 rows=1.00 loops=1)
+   Buffers: shared hit=42 read=28908 written=7
+   ->  Gather  (cost=41233.90..41234.11 rows=2 width=8) (actual time=119.749..124.581 rows=3.00 loops=1)
+         Workers Planned: 2
+         Workers Launched: 2
+         Buffers: shared hit=42 read=28908 written=7
+         ->  Partial Aggregate  (cost=40233.90..40233.91 rows=1 width=8) (actual time=115.824..115.827 rows=1.00 loops=3)
+               Buffers: shared hit=42 read=28908 written=7
+               ->  Parallel Append  (cost=2261.56..39601.67 rows=252892 width=0) (actual time=14.216..98.674 rows=200010.00 loops=3)
+                     Buffers: shared hit=42 read=28908 written=7
+                     ->  Parallel Bitmap Heap Scan on events_2026_09_09 events_1  (cost=2297.84..12833.68 rows=85668 width=0) (actual time=5.452..26.698 rows=66670.00 loops=3)
+                           Recheck Cond: ((event_type)::text = 'click'::text)
+                           Heap Blocks: exact=256
+                           Buffers: shared hit=21 read=9636 written=5
+                           Worker 0:  Heap Blocks: exact=8926
+                           Worker 1:  Heap Blocks: exact=283
+                           ->  Bitmap Index Scan on events_2026_09_09_event_type_idx  (cost=0.00..2246.44 rows=205602 width=0) (actual time=12.764..12.764 rows=200010.00 loops=1)
+                                 Index Cond: ((event_type)::text = 'click'::text)
+                                 Index Searches: 1
+                                 Buffers: shared hit=1 read=171
+                     ->  Parallel Bitmap Heap Scan on events_2026_09_11 events_3  (cost=2261.56..12781.09 rows=84362 width=0) (actual time=6.236..37.719 rows=100005.00 loops=2)
+                           Recheck Cond: ((event_type)::text = 'click'::text)
+                           Heap Blocks: exact=357
+                           Buffers: shared hit=21 read=9636
+                           Worker 1:  Heap Blocks: exact=9108
+                           ->  Bitmap Index Scan on events_2026_09_11_event_type_idx  (cost=0.00..2210.94 rows=202469 width=0) (actual time=9.491..9.491 rows=200010.00 loops=1)
+                                 Index Cond: ((event_type)::text = 'click'::text)
+                                 Index Searches: 1
+                                 Buffers: shared hit=1 read=171
+                     ->  Parallel Bitmap Heap Scan on events_2026_09_10 events_2  (cost=2221.66..12722.44 rows=82862 width=0) (actual time=14.083..75.366 rows=200010.00 loops=1)
+                           Recheck Cond: ((event_type)::text = 'click'::text)
+                           Heap Blocks: exact=9465
+                           Buffers: shared read=9636 written=2
+                           ->  Bitmap Index Scan on events_2026_09_10_event_type_idx  (cost=0.00..2171.94 rows=198869 width=0) (actual time=11.292..11.292 rows=200010.00 loops=1)
+                                 Index Cond: ((event_type)::text = 'click'::text)
+                                 Index Searches: 1
+                                 Buffers: shared read=171
+ Planning:
+   Buffers: shared hit=235 read=18
+ Planning Time: 1.589 ms
+ Execution Time: 124.753 ms
+(41 rows)
+
+
+@@@ p9.type_plus_date
+--- SQL
+EXPLAIN (ANALYZE, BUFFERS)
+SELECT COUNT(*) FROM events
+WHERE event_type = 'click' AND created_at >= '2026-09-10' AND created_at < '2026-09-11';
+--- OUT
+                                                                                QUERY PLAN                                                                                 
+---------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ Finalize Aggregate  (cost=14344.06..14344.07 rows=1 width=8) (actual time=32.809..37.583 rows=1.00 loops=1)
+   Buffers: shared hit=9676
+   ->  Gather  (cost=14343.85..14344.06 rows=2 width=8) (actual time=32.553..37.577 rows=3.00 loops=1)
+         Workers Planned: 2
+         Workers Launched: 2
+         Buffers: shared hit=9676
+         ->  Partial Aggregate  (cost=13343.85..13343.86 rows=1 width=8) (actual time=29.221..29.222 rows=1.00 loops=3)
+               Buffers: shared hit=9676
+               ->  Parallel Bitmap Heap Scan on events_2026_09_10 events  (cost=2221.65..13136.74 rows=82845 width=0) (actual time=7.080..25.236 rows=66670.00 loops=3)
+                     Recheck Cond: ((event_type)::text = 'click'::text)
+                     Filter: ((created_at >= '2026-09-10 00:00:00'::timestamp without time zone) AND (created_at < '2026-09-11 00:00:00'::timestamp without time zone))
+                     Heap Blocks: exact=3951
+                     Buffers: shared hit=9676
+                     Worker 0:  Heap Blocks: exact=3150
+                     Worker 1:  Heap Blocks: exact=2364
+                     ->  Bitmap Index Scan on events_2026_09_10_event_type_idx  (cost=0.00..2171.94 rows=198869 width=0) (actual time=7.754..7.754 rows=200010.00 loops=1)
+                           Index Cond: ((event_type)::text = 'click'::text)
+                           Index Searches: 1
+                           Buffers: shared hit=171
+ Planning:
+   Buffers: shared hit=202
+ Planning Time: 0.824 ms
+ Execution Time: 37.651 ms
+(23 rows)
+
+
+@@@ p9.sizes
+--- SQL
+SELECT c.relname AS partition,
+       pg_size_pretty(pg_relation_size(c.oid)) AS table_size,
+       pg_size_pretty(pg_indexes_size(c.oid)) AS indexes_size
+FROM pg_class c JOIN pg_inherits i ON i.inhrelid = c.oid
+JOIN pg_class p ON p.oid = i.inhparent
+WHERE p.relname = 'events' ORDER BY c.relname;
+--- OUT
+     partition     | table_size | indexes_size 
+-------------------+------------+--------------
+ events_2026_09_09 | 74 MB      | 16 MB
+ events_2026_09_10 | 74 MB      | 16 MB
+ events_2026_09_11 | 74 MB      | 16 MB
+(3 rows)
+
+
+@@@ p9.counts
+--- SQL
+SELECT count(*) AS total_rows,
+       count(*) FILTER (WHERE event_type = 'click') AS click_rows,
+       round(100.0 * count(*) FILTER (WHERE event_type = 'click') / count(*), 2) AS click_pct
+FROM events;
+--- OUT
+ total_rows | click_rows | click_pct 
+------------+------------+-----------
+    3000032 |     600030 |     20.00
+(1 row)
+
+

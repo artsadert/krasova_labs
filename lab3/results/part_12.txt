@@ -1,0 +1,279 @@
+@@@ s5.partitions
+--- SQL
+SELECT c.relname AS partition, pg_get_expr(c.relpartbound, c.oid) AS bounds
+FROM pg_class c JOIN pg_inherits i ON i.inhrelid = c.oid
+JOIN pg_class p ON p.oid = i.inhparent
+WHERE p.relname = 'rentals' ORDER BY 1;
+--- OUT
+    partition    |                               bounds                               
+-----------------+--------------------------------------------------------------------
+ rentals_2026_06 | FOR VALUES FROM ('2026-06-01 00:00:00') TO ('2026-07-01 00:00:00')
+ rentals_2026_07 | FOR VALUES FROM ('2026-07-01 00:00:00') TO ('2026-08-01 00:00:00')
+ rentals_2026_08 | FOR VALUES FROM ('2026-08-01 00:00:00') TO ('2026-09-01 00:00:00')
+ rentals_2026_09 | FOR VALUES FROM ('2026-09-01 00:00:00') TO ('2026-10-01 00:00:00')
+(4 rows)
+
+
+@@@ s5.fill
+--- SQL
+INSERT INTO rentals (car_id, user_id, started_at, finished_at, created_at, updated_at, minute_fee)
+SELECT (random() * 50000)::bigint + 1,
+       (random() * 200000)::bigint + 1,
+       ts, ts + ((random() * 120)::int || ' minutes')::interval,
+       ts, ts, round((5 + random() * 20)::numeric, 2)
+FROM (
+  SELECT TIMESTAMP '2026-06-01' + ((random() * 121 * 86400)::int || ' seconds')::interval AS ts
+  FROM generate_series(1, 2000000)
+) g;
+ANALYZE rentals;
+--- OUT
+
+@@@ s5.distribution
+--- SQL
+SELECT tableoid::regclass AS partition_name, COUNT(*),
+       pg_size_pretty(pg_relation_size(tableoid)) AS size
+FROM rentals GROUP BY tableoid ORDER BY partition_name;
+--- OUT
+ partition_name  | count  | size  
+-----------------+--------+-------
+ rentals_2026_06 | 495184 | 44 MB
+ rentals_2026_07 | 512213 | 45 MB
+ rentals_2026_08 | 514428 | 46 MB
+ rentals_2026_09 | 478175 | 42 MB
+(4 rows)
+
+
+@@@ s6.indexes
+--- SQL
+CREATE INDEX idx_rentals_user_created ON rentals (user_id, created_at DESC);
+ANALYZE rentals;
+--- OUT
+
+@@@ s6.q1_range
+--- SQL
+EXPLAIN (ANALYZE, BUFFERS)
+SELECT * FROM rentals
+WHERE created_at >= '2026-08-01' AND created_at < '2026-09-01'
+ORDER BY created_at DESC LIMIT 50;
+--- OUT
+                                                                               QUERY PLAN                                                                               
+------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ Limit  (cost=17180.16..17185.98 rows=50 width=62) (actual time=50.352..54.311 rows=50.00 loops=1)
+   Buffers: shared hit=3489 read=2431 written=182
+   ->  Gather Merge  (cost=17180.16..77081.78 rows=514325 width=62) (actual time=50.350..54.303 rows=50.00 loops=1)
+         Workers Planned: 2
+         Workers Launched: 2
+         Buffers: shared hit=3489 read=2431 written=182
+         ->  Sort  (cost=16180.13..16715.89 rows=214302 width=62) (actual time=47.021..47.026 rows=40.67 loops=3)
+               Sort Key: rentals.created_at DESC
+               Sort Method: top-N heapsort  Memory: 36kB
+               Buffers: shared hit=3489 read=2431 written=182
+               Worker 0:  Sort Method: top-N heapsort  Memory: 36kB
+               Worker 1:  Sort Method: top-N heapsort  Memory: 36kB
+               ->  Parallel Seq Scan on rentals_2026_08 rentals  (cost=0.00..9061.17 rows=214302 width=62) (actual time=0.157..29.556 rows=171476.00 loops=3)
+                     Filter: ((created_at >= '2026-08-01 00:00:00'::timestamp without time zone) AND (created_at < '2026-09-01 00:00:00'::timestamp without time zone))
+                     Buffers: shared hit=3415 read=2431 written=182
+ Planning:
+   Buffers: shared hit=233
+ Planning Time: 0.955 ms
+ Execution Time: 54.391 ms
+(19 rows)
+
+
+@@@ s6.q2_by_id
+--- SQL
+EXPLAIN (ANALYZE, BUFFERS)
+SELECT * FROM rentals WHERE id = 1234567;
+--- OUT
+                                                                        QUERY PLAN                                                                        
+----------------------------------------------------------------------------------------------------------------------------------------------------------
+ Append  (cost=0.42..33.78 rows=4 width=62) (actual time=0.081..0.119 rows=1.00 loops=1)
+   Buffers: shared hit=16
+   ->  Index Scan using rentals_2026_06_pkey on rentals_2026_06 rentals_1  (cost=0.42..8.44 rows=1 width=62) (actual time=0.051..0.051 rows=0.00 loops=1)
+         Index Cond: (id = 1234567)
+         Index Searches: 1
+         Buffers: shared hit=6
+   ->  Index Scan using rentals_2026_07_pkey on rentals_2026_07 rentals_2  (cost=0.42..8.44 rows=1 width=62) (actual time=0.029..0.029 rows=1.00 loops=1)
+         Index Cond: (id = 1234567)
+         Index Searches: 1
+         Buffers: shared hit=4
+   ->  Index Scan using rentals_2026_08_pkey on rentals_2026_08 rentals_3  (cost=0.42..8.44 rows=1 width=62) (actual time=0.016..0.016 rows=0.00 loops=1)
+         Index Cond: (id = 1234567)
+         Index Searches: 1
+         Buffers: shared hit=3
+   ->  Index Scan using rentals_2026_09_pkey on rentals_2026_09 rentals_4  (cost=0.42..8.44 rows=1 width=62) (actual time=0.020..0.020 rows=0.00 loops=1)
+         Index Cond: (id = 1234567)
+         Index Searches: 1
+         Buffers: shared hit=3
+ Planning:
+   Buffers: shared hit=414
+ Planning Time: 1.245 ms
+ Execution Time: 0.202 ms
+(22 rows)
+
+
+@@@ s6.q2_by_id_with_date
+--- SQL
+EXPLAIN (ANALYZE, BUFFERS)
+SELECT * FROM rentals
+WHERE id = 1234567 AND created_at >= '2026-08-01' AND created_at < '2026-09-01';
+--- OUT
+                                                                                 QUERY PLAN                                                                                  
+-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ Index Scan using rentals_2026_08_pkey on rentals_2026_08 rentals  (cost=0.42..8.44 rows=1 width=62) (actual time=0.047..0.047 rows=0.00 loops=1)
+   Index Cond: ((id = 1234567) AND (created_at >= '2026-08-01 00:00:00'::timestamp without time zone) AND (created_at < '2026-09-01 00:00:00'::timestamp without time zone))
+   Index Searches: 1
+   Buffers: shared hit=6
+ Planning:
+   Buffers: shared hit=229
+ Planning Time: 1.042 ms
+ Execution Time: 0.086 ms
+(8 rows)
+
+
+@@@ s6.q3_statistics
+--- SQL
+EXPLAIN (ANALYZE, BUFFERS)
+SELECT count(*) AS rentals,
+       round(avg(minute_fee), 2) AS avg_fee,
+       round(sum(minute_fee), 2) AS total_fee
+FROM rentals
+WHERE created_at >= '2026-08-01' AND created_at < '2026-09-01';
+--- OUT
+                                                                               QUERY PLAN                                                                               
+------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ Finalize Aggregate  (cost=11132.92..11132.93 rows=1 width=72) (actual time=75.198..79.011 rows=1.00 loops=1)
+   Buffers: shared hit=3979 read=1867
+   ->  Gather  (cost=11132.69..11132.90 rows=2 width=72) (actual time=74.916..78.993 rows=3.00 loops=1)
+         Workers Planned: 2
+         Workers Launched: 2
+         Buffers: shared hit=3979 read=1867
+         ->  Partial Aggregate  (cost=10132.69..10132.70 rows=1 width=72) (actual time=71.201..71.203 rows=1.00 loops=3)
+               Buffers: shared hit=3979 read=1867
+               ->  Parallel Seq Scan on rentals_2026_08 rentals  (cost=0.00..9061.17 rows=214302 width=6) (actual time=0.189..42.117 rows=171476.00 loops=3)
+                     Filter: ((created_at >= '2026-08-01 00:00:00'::timestamp without time zone) AND (created_at < '2026-09-01 00:00:00'::timestamp without time zone))
+                     Buffers: shared hit=3979 read=1867
+ Planning:
+   Buffers: shared hit=242
+ Planning Time: 1.033 ms
+ Execution Time: 79.091 ms
+(15 rows)
+
+
+@@@ s6.q4_user_history
+--- SQL
+EXPLAIN (ANALYZE, BUFFERS)
+SELECT * FROM rentals WHERE user_id = 4242
+ORDER BY created_at DESC LIMIT 50;
+--- OUT
+                                                                                    QUERY PLAN                                                                                     
+-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ Limit  (cost=1.69..65.96 rows=12 width=62) (actual time=0.051..0.199 rows=15.00 loops=1)
+   Buffers: shared hit=30
+   ->  Append  (cost=1.69..65.96 rows=12 width=62) (actual time=0.049..0.195 rows=15.00 loops=1)
+         Buffers: shared hit=30
+         ->  Index Scan using rentals_2026_09_user_id_created_at_idx on rentals_2026_09 rentals_4  (cost=0.42..16.47 rows=3 width=62) (actual time=0.048..0.083 rows=5.00 loops=1)
+               Index Cond: (user_id = 4242)
+               Index Searches: 1
+               Buffers: shared hit=11
+         ->  Index Scan using rentals_2026_08_user_id_created_at_idx on rentals_2026_08 rentals_3  (cost=0.42..16.47 rows=3 width=62) (actual time=0.020..0.030 rows=4.00 loops=1)
+               Index Cond: (user_id = 4242)
+               Index Searches: 1
+               Buffers: shared hit=7
+         ->  Index Scan using rentals_2026_07_user_id_created_at_idx on rentals_2026_07 rentals_2  (cost=0.42..16.47 rows=3 width=62) (actual time=0.029..0.031 rows=2.00 loops=1)
+               Index Cond: (user_id = 4242)
+               Index Searches: 1
+               Buffers: shared hit=5
+         ->  Index Scan using rentals_2026_06_user_id_created_at_idx on rentals_2026_06 rentals_1  (cost=0.42..16.47 rows=3 width=62) (actual time=0.021..0.047 rows=4.00 loops=1)
+               Index Cond: (user_id = 4242)
+               Index Searches: 1
+               Buffers: shared hit=7
+ Planning:
+   Buffers: shared hit=420
+ Planning Time: 1.781 ms
+ Execution Time: 0.283 ms
+(24 rows)
+
+
+@@@ s6.q4_user_history_month
+--- SQL
+EXPLAIN (ANALYZE, BUFFERS)
+SELECT * FROM rentals
+WHERE user_id = 4242 AND created_at >= '2026-09-01' AND created_at < '2026-10-01'
+ORDER BY created_at DESC LIMIT 50;
+--- OUT
+                                                                                     QUERY PLAN                                                                                      
+-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ Limit  (cost=0.42..16.49 rows=3 width=62) (actual time=0.072..0.127 rows=5.00 loops=1)
+   Buffers: shared hit=11
+   ->  Index Scan using rentals_2026_09_user_id_created_at_idx on rentals_2026_09 rentals  (cost=0.42..16.49 rows=3 width=62) (actual time=0.069..0.122 rows=5.00 loops=1)
+         Index Cond: ((user_id = 4242) AND (created_at >= '2026-09-01 00:00:00'::timestamp without time zone) AND (created_at < '2026-10-01 00:00:00'::timestamp without time zone))
+         Index Searches: 1
+         Buffers: shared hit=11
+ Planning:
+   Buffers: shared hit=239
+ Planning Time: 1.848 ms
+ Execution Time: 0.211 ms
+(10 rows)
+
+
+@@@ s6.plain_copy
+--- SQL
+CREATE TABLE rentals_plain (LIKE rentals INCLUDING DEFAULTS);
+INSERT INTO rentals_plain SELECT * FROM rentals;
+CREATE INDEX idx_plain_created ON rentals_plain (created_at);
+ANALYZE rentals_plain;
+--- OUT
+
+@@@ s6.q3_statistics_plain
+--- SQL
+EXPLAIN (ANALYZE, BUFFERS)
+SELECT count(*) AS rentals,
+       round(avg(minute_fee), 2) AS avg_fee,
+       round(sum(minute_fee), 2) AS total_fee
+FROM rentals_plain
+WHERE created_at >= '2026-08-01' AND created_at < '2026-09-01';
+--- OUT
+                                                                                  QUERY PLAN                                                                                   
+-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ Finalize Aggregate  (cost=30943.05..30943.07 rows=1 width=72) (actual time=150.642..156.043 rows=1.00 loops=1)
+   Buffers: shared hit=515730
+   ->  Gather  (cost=30942.82..30943.03 rows=2 width=72) (actual time=150.380..156.026 rows=3.00 loops=1)
+         Workers Planned: 2
+         Workers Launched: 2
+         Buffers: shared hit=515730
+         ->  Partial Aggregate  (cost=29942.82..29942.83 rows=1 width=72) (actual time=145.393..145.394 rows=1.00 loops=3)
+               Buffers: shared hit=515730
+               ->  Parallel Index Scan using idx_plain_created on rentals_plain  (cost=0.43..28873.46 rows=213872 width=6) (actual time=0.042..118.943 rows=171476.00 loops=3)
+                     Index Cond: ((created_at >= '2026-08-01 00:00:00'::timestamp without time zone) AND (created_at < '2026-09-01 00:00:00'::timestamp without time zone))
+                     Index Searches: 1
+                     Buffers: shared hit=515730
+ Planning:
+   Buffers: shared hit=96
+ Planning Time: 0.423 ms
+ Execution Time: 156.136 ms
+(16 rows)
+
+
+@@@ s7.drop_old_partition
+--- SQL
+SELECT count(*) AS rows_before FROM rentals;
+--- OUT
+ rows_before 
+-------------
+     2000000
+(1 row)
+
+
+@@@ s7.detach
+--- SQL
+ALTER TABLE rentals DETACH PARTITION rentals_2026_06;
+DROP TABLE rentals_2026_06;
+SELECT count(*) AS rows_after FROM rentals;
+--- OUT
+ rows_after 
+------------
+    1504816
+(1 row)
+
+

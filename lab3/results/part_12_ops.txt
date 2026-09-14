@@ -1,0 +1,155 @@
+
+########## Шаг 8. Контроль: есть ли партиции rentals на текущий и 2 следующих месяца
+
+$ python3 partition_health_check.py --table rentals --granularity month --horizon 2
+2026-09-12 14:04:59  PartitionHealthCheck: table=rentals, today=2026-09-12, horizon=2 month(s)
+    rentals_2026_09  ok
+    rentals_2026_10  MISSING
+    rentals_2026_11  MISSING
+    Result: CRITICAL
+    Уведомление (alert):
+🚨 Partition alert
+Table: rentals
+Missing partitions:
+rentals_2026_10
+rentals_2026_11
+Expected horizon: 2 months
+Checked at:
+2026-09-12 14:04:59
+      console: напечатано в stdout
+      webhook: HTTP 200 от http://127.0.0.1:8099/
+(код возврата: 2)
+
+
+########## Шаг 9. Alert ушёл. Повторная проверка — дубликат подавлен
+
+$ python3 partition_health_check.py --table rentals --granularity month --horizon 2
+2026-09-12 14:04:59  PartitionHealthCheck: table=rentals, today=2026-09-12, horizon=2 month(s)
+    rentals_2026_09  ok
+    rentals_2026_10  MISSING
+    rentals_2026_11  MISSING
+    Result: CRITICAL
+    Уведомление не отправлено: состояние не изменилось — alert подавлен
+(код возврата: 2)
+
+
+########## Шаг 7. Ночная job создаёт будущие месячные партиции
+
+$ python3 create_partitions_job.py --table rentals --granularity month --horizon 2
+2026-09-12 14:04:59  Partition job started.
+2026-09-12 14:04:59  Table: rentals, today: 2026-09-12, horizon: 2 month(s)
+2026-09-12 14:04:59  Existing partitions: 3
+2026-09-12 14:04:59  Required partitions: 3
+2026-09-12 14:04:59  Missing partitions: 2
+2026-09-12 14:04:59  Creating: rentals_2026_10
+2026-09-12 14:04:59  Partition rentals_2026_10 created successfully.
+2026-09-12 14:04:59  Creating: rentals_2026_11
+2026-09-12 14:05:00  Partition rentals_2026_11 created successfully.
+2026-09-12 14:05:00  Partition job finished.
+(код возврата: 0)
+
+
+########## Шаг 7б. Повторный запуск — идемпотентность
+
+$ python3 create_partitions_job.py --table rentals --granularity month --horizon 2
+2026-09-12 14:05:00  Partition job started.
+2026-09-12 14:05:00  Table: rentals, today: 2026-09-12, horizon: 2 month(s)
+2026-09-12 14:05:00  Existing partitions: 5
+2026-09-12 14:05:00  Required partitions: 3
+2026-09-12 14:05:00  Missing partitions: 0
+2026-09-12 14:05:00  Nothing to create — all required partitions already exist.
+2026-09-12 14:05:00  Partition job finished.
+(код возврата: 0)
+
+
+########## Контрольная проверка — OK и recovery-уведомление
+
+$ python3 partition_health_check.py --table rentals --granularity month --horizon 2
+2026-09-12 14:05:00  PartitionHealthCheck: table=rentals, today=2026-09-12, horizon=2 month(s)
+    rentals_2026_09  ok
+    rentals_2026_10  ok
+    rentals_2026_11  ok
+    Result: OK
+    Уведомление (recovery):
+🟢 Partition check OK
+Table: rentals
+All required partitions exist.
+Checked at:
+2026-09-12 14:05:00
+      console: напечатано в stdout
+      webhook: HTTP 200 от http://127.0.0.1:8099/
+(код возврата: 0)
+
+
+########## Проверка перехода через год: горизонт 4 месяца от ноября
+
+$ python3 create_partitions_job.py --table rentals --granularity month --horizon 4 --today 2026-11-15
+2026-09-12 14:05:00  Partition job started.
+2026-09-12 14:05:00  Table: rentals, today: 2026-11-15, horizon: 4 month(s)
+2026-09-12 14:05:00  Existing partitions: 5
+2026-09-12 14:05:00  Required partitions: 5
+2026-09-12 14:05:00  Missing partitions: 4
+2026-09-12 14:05:00  Creating: rentals_2026_12
+2026-09-12 14:05:01  Partition rentals_2026_12 created successfully.
+2026-09-12 14:05:01  Creating: rentals_2027_01
+2026-09-12 14:05:01  Partition rentals_2027_01 created successfully.
+2026-09-12 14:05:01  Creating: rentals_2027_02
+2026-09-12 14:05:01  Partition rentals_2027_02 created successfully.
+2026-09-12 14:05:01  Creating: rentals_2027_03
+2026-09-12 14:05:01  Partition rentals_2027_03 created successfully.
+2026-09-12 14:05:01  Partition job finished.
+(код возврата: 0)
+
+$ python3 partition_health_check.py --table rentals --granularity month --horizon 4 --today 2026-11-15
+2026-09-12 14:05:01  PartitionHealthCheck: table=rentals, today=2026-11-15, horizon=4 month(s)
+    rentals_2026_11  ok
+    rentals_2026_12  ok
+    rentals_2027_01  ok
+    rentals_2027_02  ok
+    rentals_2027_03  ok
+    Result: OK
+    Уведомление не отправлено: всё в порядке, уведомлять не о чем
+(код возврата: 0)
+
+
+########## Итоговый список партиций rentals
+
+$ printf 'SET search_path TO carrent_lab3;\nSELECT c.relname AS partition, pg_get_expr(c.relpartbound, c.oid) AS bounds FROM pg_class c JOIN pg_inherits i ON i.inhrelid = c.oid JOIN pg_class p ON p.oid = i.inhparent WHERE p.relname = %s ORDER BY 1;\n' "'rentals'" | docker exec -i -e PGPASSWORD=12341234 database_postgres psql -U postgres -d postgres -X -q
+    partition    |                               bounds                               
+-----------------+--------------------------------------------------------------------
+ rentals_2026_07 | FOR VALUES FROM ('2026-07-01 00:00:00') TO ('2026-08-01 00:00:00')
+ rentals_2026_08 | FOR VALUES FROM ('2026-08-01 00:00:00') TO ('2026-09-01 00:00:00')
+ rentals_2026_09 | FOR VALUES FROM ('2026-09-01 00:00:00') TO ('2026-10-01 00:00:00')
+ rentals_2026_10 | FOR VALUES FROM ('2026-10-01 00:00:00') TO ('2026-11-01 00:00:00')
+ rentals_2026_11 | FOR VALUES FROM ('2026-11-01 00:00:00') TO ('2026-12-01 00:00:00')
+ rentals_2026_12 | FOR VALUES FROM ('2026-12-01 00:00:00') TO ('2027-01-01 00:00:00')
+ rentals_2027_01 | FOR VALUES FROM ('2027-01-01 00:00:00') TO ('2027-02-01 00:00:00')
+ rentals_2027_02 | FOR VALUES FROM ('2027-02-01 00:00:00') TO ('2027-03-01 00:00:00')
+ rentals_2027_03 | FOR VALUES FROM ('2027-03-01 00:00:00') TO ('2027-04-01 00:00:00')
+(9 rows)
+
+(код возврата: 0)
+
+
+########## Доставленные уведомления
+
+$ cat received_alerts.log
+=== доставлено 2026-09-12 14:04:59 ===
+🚨 Partition alert
+Table: rentals
+Missing partitions:
+rentals_2026_10
+rentals_2026_11
+Expected horizon: 2 months
+Checked at:
+2026-09-12 14:04:59
+
+=== доставлено 2026-09-12 14:05:00 ===
+🟢 Partition check OK
+Table: rentals
+All required partitions exist.
+Checked at:
+2026-09-12 14:05:00
+
+(код возврата: 0)
+

@@ -1,0 +1,250 @@
+
+########## Шаг 0. Исходное состояние: какие партиции есть сейчас
+
+$ psql -c "SELECT c.relname AS partition FROM pg_class c
+JOIN pg_inherits i ON i.inhrelid = c.oid
+JOIN pg_class p ON p.oid = i.inhparent
+WHERE p.relname = 'events' ORDER BY 1;"
+     partition     
+-------------------
+ events_2026_09_09
+ events_2026_09_10
+ events_2026_09_11
+ events_2026_09_12
+ events_2026_09_13
+ events_2026_09_14
+ events_2026_09_15
+(7 rows)
+
+
+$ date '+сегодня: %Y-%m-%d'
+сегодня: 2026-09-12
+(код возврата: 0)
+
+
+########## Шаг 1. Проверка ДО запуска job — партиций на горизонт нет, ожидаем CRITICAL и alert
+
+$ python3 partition_health_check.py --table events --horizon 3
+2026-09-12 14:03:29  PartitionHealthCheck: table=events, today=2026-09-12, horizon=3 day(s)
+    events_2026_09_12  ok
+    events_2026_09_13  ok
+    events_2026_09_14  ok
+    events_2026_09_15  ok
+    Result: OK
+    Уведомление не отправлено: всё в порядке, уведомлять не о чем
+(код возврата: 0)
+
+
+########## Шаг 2. Повторная проверка — состояние не изменилось, alert НЕ должен уйти повторно
+
+$ python3 partition_health_check.py --table events --horizon 3
+2026-09-12 14:03:29  PartitionHealthCheck: table=events, today=2026-09-12, horizon=3 day(s)
+    events_2026_09_12  ok
+    events_2026_09_13  ok
+    events_2026_09_14  ok
+    events_2026_09_15  ok
+    Result: OK
+    Уведомление не отправлено: всё в порядке, уведомлять не о чем
+(код возврата: 0)
+
+
+########## Шаг 3. CreatePartitionsJob создаёт недостающие партиции
+
+$ python3 create_partitions_job.py --table events --horizon 3
+2026-09-12 14:03:29  Partition job started.
+2026-09-12 14:03:29  Table: events, today: 2026-09-12, horizon: 3 day(s)
+2026-09-12 14:03:29  Existing partitions: 7
+2026-09-12 14:03:29  Required partitions: 4
+2026-09-12 14:03:29  Missing partitions: 0
+2026-09-12 14:03:29  Nothing to create — all required partitions already exist.
+2026-09-12 14:03:29  Partition job finished.
+(код возврата: 0)
+
+
+########## Шаг 4. Повторный запуск job — идемпотентность
+
+$ python3 create_partitions_job.py --table events --horizon 3
+2026-09-12 14:03:29  Partition job started.
+2026-09-12 14:03:29  Table: events, today: 2026-09-12, horizon: 3 day(s)
+2026-09-12 14:03:29  Existing partitions: 7
+2026-09-12 14:03:29  Required partitions: 4
+2026-09-12 14:03:29  Missing partitions: 0
+2026-09-12 14:03:29  Nothing to create — all required partitions already exist.
+2026-09-12 14:03:29  Partition job finished.
+(код возврата: 0)
+
+
+########## Шаг 5. Проверка после восстановления — ожидаем OK и recovery-уведомление
+
+$ python3 partition_health_check.py --table events --horizon 3
+2026-09-12 14:03:30  PartitionHealthCheck: table=events, today=2026-09-12, horizon=3 day(s)
+    events_2026_09_12  ok
+    events_2026_09_13  ok
+    events_2026_09_14  ok
+    events_2026_09_15  ok
+    Result: OK
+    Уведомление не отправлено: всё в порядке, уведомлять не о чем
+(код возврата: 0)
+
+
+########## Шаг 6. Проверка ещё раз — состояние OK не изменилось, уведомлений нет
+
+$ python3 partition_health_check.py --table events --horizon 3
+2026-09-12 14:03:30  PartitionHealthCheck: table=events, today=2026-09-12, horizon=3 day(s)
+    events_2026_09_12  ok
+    events_2026_09_13  ok
+    events_2026_09_14  ok
+    events_2026_09_15  ok
+    Result: OK
+    Уведомление не отправлено: всё в порядке, уведомлять не о чем
+(код возврата: 0)
+
+
+########## Шаг 7. Имитация сбоя ночной job: удаляем партицию последнего дня горизонта
+
+$ psql -c "DROP TABLE events_2026_09_15;"
+
+$ psql -c "SELECT c.relname AS partition FROM pg_class c
+JOIN pg_inherits i ON i.inhrelid = c.oid
+JOIN pg_class p ON p.oid = i.inhparent
+WHERE p.relname = 'events' ORDER BY 1;"
+     partition     
+-------------------
+ events_2026_09_09
+ events_2026_09_10
+ events_2026_09_11
+ events_2026_09_12
+ events_2026_09_13
+ events_2026_09_14
+(6 rows)
+
+
+
+########## Шаг 8. PartitionHealthCheck обнаруживает проблему — CRITICAL и alert
+
+$ python3 partition_health_check.py --table events --horizon 3
+2026-09-12 14:03:30  PartitionHealthCheck: table=events, today=2026-09-12, horizon=3 day(s)
+    events_2026_09_12  ok
+    events_2026_09_13  ok
+    events_2026_09_14  ok
+    events_2026_09_15  MISSING
+    Result: CRITICAL
+    Уведомление (alert):
+🚨 Partition alert
+Table: events
+Missing partitions:
+events_2026_09_15
+Expected horizon: 3 days
+Checked at:
+2026-09-12 14:03:30
+      console: напечатано в stdout
+      webhook: HTTP 200 от http://127.0.0.1:8099/
+(код возврата: 2)
+
+
+########## Шаг 9. Ещё две проверки подряд — alert подавлен, спама нет
+
+$ python3 partition_health_check.py --table events --horizon 3
+2026-09-12 14:03:31  PartitionHealthCheck: table=events, today=2026-09-12, horizon=3 day(s)
+    events_2026_09_12  ok
+    events_2026_09_13  ok
+    events_2026_09_14  ok
+    events_2026_09_15  MISSING
+    Result: CRITICAL
+    Уведомление не отправлено: состояние не изменилось — alert подавлен
+(код возврата: 2)
+
+$ python3 partition_health_check.py --table events --horizon 3
+2026-09-12 14:03:31  PartitionHealthCheck: table=events, today=2026-09-12, horizon=3 day(s)
+    events_2026_09_12  ok
+    events_2026_09_13  ok
+    events_2026_09_14  ok
+    events_2026_09_15  MISSING
+    Result: CRITICAL
+    Уведомление не отправлено: состояние не изменилось — alert подавлен
+(код возврата: 2)
+
+
+########## Шаг 10. Восстановление: запускаем job
+
+$ python3 create_partitions_job.py --table events --horizon 3
+2026-09-12 14:03:31  Partition job started.
+2026-09-12 14:03:31  Table: events, today: 2026-09-12, horizon: 3 day(s)
+2026-09-12 14:03:31  Existing partitions: 6
+2026-09-12 14:03:31  Required partitions: 4
+2026-09-12 14:03:31  Missing partitions: 1
+2026-09-12 14:03:31  Creating: events_2026_09_15
+2026-09-12 14:03:31  Partition events_2026_09_15 created successfully.
+2026-09-12 14:03:31  Partition job finished.
+(код возврата: 0)
+
+
+########## Шаг 11. Контрольная проверка — OK и recovery-уведомление
+
+$ python3 partition_health_check.py --table events --horizon 3
+2026-09-12 14:03:32  PartitionHealthCheck: table=events, today=2026-09-12, horizon=3 day(s)
+    events_2026_09_12  ok
+    events_2026_09_13  ok
+    events_2026_09_14  ok
+    events_2026_09_15  ok
+    Result: OK
+    Уведомление (recovery):
+🟢 Partition check OK
+Table: events
+All required partitions exist.
+Checked at:
+2026-09-12 14:03:32
+      console: напечатано в stdout
+      webhook: HTTP 200 от http://127.0.0.1:8099/
+(код возврата: 0)
+
+
+########## Шаг 12. Что реально доставлено во внешний канал
+
+$ cat received_alerts.log
+=== доставлено 2026-09-12 14:03:31 ===
+🚨 Partition alert
+Table: events
+Missing partitions:
+events_2026_09_15
+Expected horizon: 3 days
+Checked at:
+2026-09-12 14:03:30
+
+=== доставлено 2026-09-12 14:03:32 ===
+🟢 Partition check OK
+Table: events
+All required partitions exist.
+Checked at:
+2026-09-12 14:03:32
+
+(код возврата: 0)
+
+
+########## Шаг 13. Итоговое состояние партиций и файла состояния алертов
+
+$ psql -c "SELECT c.relname AS partition, pg_get_expr(c.relpartbound, c.oid) AS bounds
+FROM pg_class c JOIN pg_inherits i ON i.inhrelid = c.oid
+JOIN pg_class p ON p.oid = i.inhparent
+WHERE p.relname = 'events' ORDER BY 1;"
+     partition     |                               bounds                               
+-------------------+--------------------------------------------------------------------
+ events_2026_09_09 | FOR VALUES FROM ('2026-09-09 00:00:00') TO ('2026-09-10 00:00:00')
+ events_2026_09_10 | FOR VALUES FROM ('2026-09-10 00:00:00') TO ('2026-09-11 00:00:00')
+ events_2026_09_11 | FOR VALUES FROM ('2026-09-11 00:00:00') TO ('2026-09-12 00:00:00')
+ events_2026_09_12 | FOR VALUES FROM ('2026-09-12 00:00:00') TO ('2026-09-13 00:00:00')
+ events_2026_09_13 | FOR VALUES FROM ('2026-09-13 00:00:00') TO ('2026-09-14 00:00:00')
+ events_2026_09_14 | FOR VALUES FROM ('2026-09-14 00:00:00') TO ('2026-09-15 00:00:00')
+ events_2026_09_15 | FOR VALUES FROM ('2026-09-15 00:00:00') TO ('2026-09-16 00:00:00')
+(7 rows)
+
+
+$ cat alert_state.json
+{
+  "events:day": {
+    "status": "OK",
+    "last_alert_at": "2026-09-12T14:03:32",
+    "checked_at": "2026-09-12T14:03:32"
+  }
+}(код возврата: 0)
+

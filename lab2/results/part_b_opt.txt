@@ -1,0 +1,114 @@
+@@@ opt.setup
+--- SQL
+CREATE INDEX IF NOT EXISTS idx_rentals_created_at ON rentals(created_at);
+--- OUT
+
+@@@ opt.v0_original
+--- SQL
+EXPLAIN (ANALYZE, BUFFERS)
+SELECT * FROM rentals
+WHERE created_at >= NOW() - INTERVAL '7 days' AND created_at < NOW();
+--- OUT
+                                                                  QUERY PLAN                                                                   
+-----------------------------------------------------------------------------------------------------------------------------------------------
+ Bitmap Heap Scan on rentals  (cost=1940.11..62520.24 rows=91285 width=62) (actual time=26.974..144.966 rows=95787.00 loops=1)
+   Recheck Cond: ((created_at >= (now() - '7 days'::interval)) AND (created_at < now()))
+   Heap Blocks: exact=46213
+   Buffers: shared hit=2 read=46476
+   ->  Bitmap Index Scan on idx_rentals_created_at  (cost=0.00..1917.29 rows=91285 width=0) (actual time=13.972..13.972 rows=95787.00 loops=1)
+         Index Cond: ((created_at >= (now() - '7 days'::interval)) AND (created_at < now()))
+         Index Searches: 1
+         Buffers: shared hit=2 read=263
+ Planning:
+   Buffers: shared hit=82 read=28
+ Planning Time: 0.656 ms
+ Execution Time: 150.890 ms
+(12 rows)
+
+
+@@@ opt.v1_pagination
+--- SQL
+EXPLAIN (ANALYZE, BUFFERS)
+SELECT * FROM rentals
+WHERE created_at >= NOW() - INTERVAL '7 days' AND created_at < NOW()
+ORDER BY created_at DESC LIMIT 50;
+--- OUT
+                                                                         QUERY PLAN                                                                          
+-------------------------------------------------------------------------------------------------------------------------------------------------------------
+ Limit  (cost=0.44..112.44 rows=50 width=62) (actual time=0.020..0.287 rows=50.00 loops=1)
+   Buffers: shared hit=53
+   ->  Index Scan Backward using idx_rentals_created_at on rentals  (cost=0.44..204473.95 rows=91285 width=62) (actual time=0.018..0.280 rows=50.00 loops=1)
+         Index Cond: ((created_at >= (now() - '7 days'::interval)) AND (created_at < now()))
+         Index Searches: 1
+         Buffers: shared hit=53
+ Planning:
+   Buffers: shared hit=131
+ Planning Time: 0.739 ms
+ Execution Time: 0.351 ms
+(10 rows)
+
+
+@@@ opt.v2_index
+--- SQL
+CREATE INDEX idx_rentals_created_cover ON rentals(created_at)
+  INCLUDE (id, user_id, car_id, minute_fee);
+VACUUM (ANALYZE) rentals;
+--- OUT
+
+@@@ opt.v2_covering
+--- SQL
+EXPLAIN (ANALYZE, BUFFERS)
+SELECT id, user_id, car_id, minute_fee, created_at FROM rentals
+WHERE created_at >= NOW() - INTERVAL '7 days' AND created_at < NOW();
+--- OUT
+                                                                       QUERY PLAN                                                                        
+---------------------------------------------------------------------------------------------------------------------------------------------------------
+ Index Only Scan using idx_rentals_created_cover on rentals  (cost=0.44..5037.00 rows=103428 width=38) (actual time=0.035..20.540 rows=95787.00 loops=1)
+   Index Cond: ((created_at >= (now() - '7 days'::interval)) AND (created_at < now()))
+   Heap Fetches: 0
+   Index Searches: 1
+   Buffers: shared hit=47138
+ Planning:
+   Buffers: shared hit=121
+ Planning Time: 0.632 ms
+ Execution Time: 24.248 ms
+(9 rows)
+
+
+@@@ opt.v3_aggregate
+--- SQL
+EXPLAIN (ANALYZE, BUFFERS)
+SELECT count(*), sum(minute_fee) FROM rentals
+WHERE created_at >= NOW() - INTERVAL '7 days' AND created_at < NOW();
+--- OUT
+                                                                          QUERY PLAN                                                                          
+--------------------------------------------------------------------------------------------------------------------------------------------------------------
+ Aggregate  (cost=5554.14..5554.15 rows=1 width=40) (actual time=29.191..29.193 rows=1.00 loops=1)
+   Buffers: shared hit=47137
+   ->  Index Only Scan using idx_rentals_created_cover on rentals  (cost=0.44..5037.00 rows=103428 width=6) (actual time=0.059..19.319 rows=95786.00 loops=1)
+         Index Cond: ((created_at >= (now() - '7 days'::interval)) AND (created_at < now()))
+         Heap Fetches: 0
+         Index Searches: 1
+         Buffers: shared hit=47137
+ Planning:
+   Buffers: shared hit=139
+ Planning Time: 1.090 ms
+ Execution Time: 29.257 ms
+(11 rows)
+
+
+@@@ opt.sizes
+--- SQL
+SELECT indexrelname AS index_name,
+       pg_size_pretty(pg_relation_size(indexrelid)) AS size
+FROM pg_stat_user_indexes WHERE schemaname='carrent_lab2' AND relname='rentals'
+ORDER BY pg_relation_size(indexrelid) DESC;
+--- OUT
+        index_name         |  size  
+---------------------------+--------
+ idx_rentals_created_cover | 280 MB
+ idx_rentals_created_at    | 107 MB
+ rentals_pkey              | 107 MB
+(3 rows)
+
+

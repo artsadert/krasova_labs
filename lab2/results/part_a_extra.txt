@@ -1,0 +1,199 @@
+@@@ extra.scale
+--- SQL
+SELECT count(*) AS rows,
+       pg_size_pretty(pg_relation_size('events')) AS table_size FROM events;
+--- OUT
+   rows   | table_size 
+----------+------------
+ 10000000 | 822 MB
+(1 row)
+
+
+@@@ extra.agg_volume
+--- SQL
+SELECT count(*) AS rows_last_30_days,
+       round(100.0*count(*)/(SELECT count(*) FROM events),2) AS pct_of_table
+FROM events WHERE created_at >= NOW() - INTERVAL '30 days';
+--- OUT
+ rows_last_30_days | pct_of_table 
+-------------------+--------------
+            821855 |         8.22
+(1 row)
+
+
+@@@ extra.top_user
+--- SQL
+SELECT user_id, count(*) AS events
+FROM events GROUP BY user_id ORDER BY count(*) DESC LIMIT 3;
+--- OUT
+ user_id | events 
+---------+--------
+   30096 |    145
+   55123 |    145
+   66844 |    142
+(3 rows)
+
+
+@@@ extra.t7_top_noindex
+--- SQL
+EXPLAIN (ANALYZE, BUFFERS)
+SELECT * FROM events WHERE user_id = 30096 ORDER BY created_at DESC LIMIT 100;
+--- OUT
+                                                               QUERY PLAN                                                                
+-----------------------------------------------------------------------------------------------------------------------------------------
+ Limit  (cost=158307.52..158318.94 rows=98 width=54) (actual time=214.842..219.681 rows=100.00 loops=1)
+   Buffers: shared hit=1766 read=103531
+   ->  Gather Merge  (cost=158307.52..158318.94 rows=98 width=54) (actual time=211.284..216.114 rows=100.00 loops=1)
+         Workers Planned: 2
+         Workers Launched: 2
+         Buffers: shared hit=1766 read=103531
+         ->  Sort  (cost=157307.50..157307.60 rows=41 width=54) (actual time=189.083..189.088 rows=43.00 loops=3)
+               Sort Key: created_at DESC
+               Sort Method: quicksort  Memory: 32kB
+               Buffers: shared hit=1766 read=103531
+               Worker 0:  Sort Method: quicksort  Memory: 30kB
+               Worker 1:  Sort Method: quicksort  Memory: 31kB
+               ->  Parallel Seq Scan on events  (cost=0.00..157306.40 rows=41 width=54) (actual time=15.005..188.915 rows=48.33 loops=3)
+                     Filter: (user_id = 30096)
+                     Rows Removed by Filter: 3333285
+                     Buffers: shared hit=1692 read=103531
+ Planning:
+   Buffers: shared hit=94
+ Planning Time: 0.557 ms
+ JIT:
+   Functions: 7
+   Options: Inlining false, Optimization false, Expressions true, Deforming true
+   Timing: Generation 0.917 ms (Deform 0.207 ms), Inlining 0.000 ms, Optimization 0.894 ms, Emission 13.306 ms, Total 15.117 ms
+ Execution Time: 241.188 ms
+(24 rows)
+
+
+@@@ extra.create_user_idx
+--- SQL
+CREATE INDEX idx_events_user_id ON events(user_id);
+--- OUT
+
+@@@ extra.t7_top_user_idx
+--- SQL
+EXPLAIN (ANALYZE, BUFFERS)
+SELECT * FROM events WHERE user_id = 30096 ORDER BY created_at DESC LIMIT 100;
+--- OUT
+                                                                 QUERY PLAN                                                                  
+---------------------------------------------------------------------------------------------------------------------------------------------
+ Limit  (cost=396.61..396.86 rows=99 width=54) (actual time=0.399..0.414 rows=100.00 loops=1)
+   Buffers: shared hit=154
+   ->  Sort  (cost=396.61..396.86 rows=99 width=54) (actual time=0.397..0.404 rows=100.00 loops=1)
+         Sort Key: created_at DESC
+         Sort Method: quicksort  Memory: 44kB
+         Buffers: shared hit=154
+         ->  Bitmap Heap Scan on events  (cost=5.20..393.33 rows=99 width=54) (actual time=0.059..0.336 rows=145.00 loops=1)
+               Recheck Cond: (user_id = 30096)
+               Heap Blocks: exact=145
+               Buffers: shared hit=151
+               ->  Bitmap Index Scan on idx_events_user_id  (cost=0.00..5.18 rows=99 width=0) (actual time=0.029..0.029 rows=145.00 loops=1)
+                     Index Cond: (user_id = 30096)
+                     Index Searches: 1
+                     Buffers: shared hit=6
+ Planning:
+   Buffers: shared hit=110
+ Planning Time: 0.480 ms
+ Execution Time: 0.484 ms
+(18 rows)
+
+
+@@@ extra.create_composite
+--- SQL
+CREATE INDEX idx_events_user_created ON events(user_id, created_at DESC);
+--- OUT
+
+@@@ extra.t7_top_composite
+--- SQL
+EXPLAIN (ANALYZE, BUFFERS)
+SELECT * FROM events WHERE user_id = 30096 ORDER BY created_at DESC LIMIT 100;
+--- OUT
+                                                                    QUERY PLAN                                                                    
+--------------------------------------------------------------------------------------------------------------------------------------------------
+ Limit  (cost=396.61..396.86 rows=99 width=54) (actual time=0.648..0.672 rows=100.00 loops=1)
+   Buffers: shared hit=155
+   ->  Sort  (cost=396.61..396.86 rows=99 width=54) (actual time=0.646..0.656 rows=100.00 loops=1)
+         Sort Key: created_at DESC
+         Sort Method: quicksort  Memory: 44kB
+         Buffers: shared hit=155
+         ->  Bitmap Heap Scan on events  (cost=5.20..393.33 rows=99 width=54) (actual time=0.131..0.537 rows=145.00 loops=1)
+               Recheck Cond: (user_id = 30096)
+               Heap Blocks: exact=145
+               Buffers: shared hit=152
+               ->  Bitmap Index Scan on idx_events_user_created  (cost=0.00..5.18 rows=99 width=0) (actual time=0.078..0.078 rows=145.00 loops=1)
+                     Index Cond: (user_id = 30096)
+                     Index Searches: 1
+                     Buffers: shared hit=7
+ Planning:
+   Buffers: shared hit=130
+ Planning Time: 1.013 ms
+ Execution Time: 0.806 ms
+(18 rows)
+
+
+@@@ extra.create_created_idx
+--- SQL
+CREATE INDEX idx_events_created_at ON events(created_at);
+--- OUT
+
+@@@ extra.index_sizes_10m
+--- SQL
+SELECT indexrelname AS index_name,
+       pg_size_pretty(pg_relation_size(indexrelid)) AS index_size,
+       pg_relation_size(indexrelid) AS bytes
+FROM pg_stat_user_indexes
+WHERE schemaname='krasova_lab2' AND relname='events'
+ORDER BY pg_relation_size(indexrelid) DESC;
+--- OUT
+       index_name        | index_size |   bytes   
+-------------------------+------------+-----------
+ idx_events_user_created | 301 MB     | 315441152
+ idx_events_created_at   | 214 MB     | 224641024
+ events_pkey             | 214 MB     | 224632832
+ idx_events_user_id      | 68 MB      |  71065600
+(4 rows)
+
+
+@@@ extra.total_size_10m
+--- SQL
+SELECT pg_size_pretty(pg_relation_size('events')) AS table_size,
+       pg_size_pretty(pg_indexes_size('events')) AS indexes_size,
+       pg_size_pretty(pg_total_relation_size('events')) AS total_size;
+--- OUT
+ table_size | indexes_size | total_size 
+------------+--------------+------------
+ 822 MB     | 797 MB       | 1619 MB
+(1 row)
+
+
+@@@ extra.t11_daily
+--- SQL
+EXPLAIN (ANALYZE, BUFFERS)
+SELECT DATE(created_at), COUNT(*)
+FROM events WHERE created_at >= NOW() - INTERVAL '365 days'
+GROUP BY DATE(created_at);
+--- OUT
+                                                            QUERY PLAN                                                             
+-----------------------------------------------------------------------------------------------------------------------------------
+ HashAggregate  (cost=867719.42..1070843.18 rows=9999939 width=12) (actual time=3666.665..3666.933 rows=366.00 loops=1)
+   Group Key: date(created_at)
+   Planned Partitions: 128  Batches: 1  Memory Usage: 2089kB
+   Buffers: shared hit=2775 read=102448
+   ->  Seq Scan on events  (cost=0.00..305222.85 rows=9999939 width=4) (actual time=136.196..2590.836 rows=9999933.00 loops=1)
+         Filter: (created_at >= (now() - '365 days'::interval))
+         Rows Removed by Filter: 67
+         Buffers: shared hit=2775 read=102448
+ Planning:
+   Buffers: shared hit=161
+ Planning Time: 0.883 ms
+ JIT:
+   Functions: 11
+   Options: Inlining true, Optimization true, Expressions true, Deforming true
+   Timing: Generation 0.689 ms (Deform 0.260 ms), Inlining 73.302 ms, Optimization 37.437 ms, Emission 25.164 ms, Total 136.592 ms
+ Execution Time: 3692.333 ms
+(16 rows)
+
+

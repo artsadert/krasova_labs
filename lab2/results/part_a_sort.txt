@@ -1,0 +1,130 @@
+@@@ sort.forced_index_scan
+--- SQL
+SET enable_bitmapscan = off;
+EXPLAIN (ANALYZE, BUFFERS)
+SELECT * FROM events WHERE user_id = 30096 ORDER BY created_at DESC LIMIT 100;
+--- OUT
+                                                                  QUERY PLAN                                                                   
+-----------------------------------------------------------------------------------------------------------------------------------------------
+ Limit  (cost=0.43..402.15 rows=99 width=54) (actual time=0.064..0.338 rows=100.00 loops=1)
+   Buffers: shared hit=106
+   ->  Index Scan using idx_events_user_created on events  (cost=0.43..402.15 rows=99 width=54) (actual time=0.063..0.323 rows=100.00 loops=1)
+         Index Cond: (user_id = 30096)
+         Index Searches: 1
+         Buffers: shared hit=106
+ Planning:
+   Buffers: shared hit=142
+ Planning Time: 1.016 ms
+ Execution Time: 0.403 ms
+(10 rows)
+
+
+@@@ sort.create_power_user
+--- SQL
+INSERT INTO events (user_id, event_type, payload, created_at)
+SELECT 9999999, 'MESSAGE', '{"source":"web"}'::jsonb,
+       NOW() - (random() * INTERVAL '365 days')
+FROM generate_series(1, 200000);
+ANALYZE events;
+--- OUT
+
+@@@ sort.power_user_count
+--- SQL
+SELECT count(*) AS events_of_power_user FROM events WHERE user_id = 9999999;
+--- OUT
+ events_of_power_user 
+----------------------
+               200000
+(1 row)
+
+
+@@@ sort.drop_composite
+--- SQL
+DROP INDEX IF EXISTS idx_events_user_created;
+--- OUT
+
+@@@ sort.power_user_only_user_idx
+--- SQL
+
+EXPLAIN (ANALYZE, BUFFERS)
+SELECT * FROM events WHERE user_id = 9999999 ORDER BY created_at DESC LIMIT 100;
+--- OUT
+                                                                          QUERY PLAN                                                                          
+--------------------------------------------------------------------------------------------------------------------------------------------------------------
+ Limit  (cost=0.43..351.48 rows=100 width=54) (actual time=0.326..11.673 rows=100.00 loops=1)
+   Buffers: shared hit=4961
+   ->  Index Scan Backward using idx_events_created_at on events  (cost=0.43..717312.47 rows=204334 width=54) (actual time=0.324..11.656 rows=100.00 loops=1)
+         Filter: (user_id = 9999999)
+         Rows Removed by Filter: 4846
+         Index Searches: 1
+         Buffers: shared hit=4961
+ Planning:
+   Buffers: shared hit=127
+ Planning Time: 0.975 ms
+ Execution Time: 11.760 ms
+(11 rows)
+
+
+@@@ sort.recreate_composite
+--- SQL
+CREATE INDEX idx_events_user_created ON events(user_id, created_at DESC);
+--- OUT
+
+@@@ sort.power_user_composite
+--- SQL
+
+EXPLAIN (ANALYZE, BUFFERS)
+SELECT * FROM events WHERE user_id = 9999999 ORDER BY created_at DESC LIMIT 100;
+--- OUT
+                                                                      QUERY PLAN                                                                      
+------------------------------------------------------------------------------------------------------------------------------------------------------
+ Limit  (cost=0.43..208.21 rows=100 width=54) (actual time=0.089..0.827 rows=100.00 loops=1)
+   Buffers: shared hit=106
+   ->  Index Scan using idx_events_user_created on events  (cost=0.43..424566.99 rows=204340 width=54) (actual time=0.087..0.812 rows=100.00 loops=1)
+         Index Cond: (user_id = 9999999)
+         Index Searches: 1
+         Buffers: shared hit=106
+ Planning:
+   Buffers: shared hit=142
+ Planning Time: 0.917 ms
+ Execution Time: 0.895 ms
+(10 rows)
+
+
+@@@ sort.create_reversed
+--- SQL
+CREATE INDEX idx_events_created_user ON events(created_at DESC, user_id);
+--- OUT
+
+@@@ sort.drop_correct
+--- SQL
+DROP INDEX idx_events_user_created;
+--- OUT
+
+@@@ sort.power_user_reversed
+--- SQL
+
+EXPLAIN (ANALYZE, BUFFERS)
+SELECT * FROM events WHERE user_id = 9999999 ORDER BY created_at DESC LIMIT 100;
+--- OUT
+                                                                      QUERY PLAN                                                                      
+------------------------------------------------------------------------------------------------------------------------------------------------------
+ Limit  (cost=0.43..320.53 rows=100 width=54) (actual time=0.089..0.723 rows=100.00 loops=1)
+   Buffers: shared hit=130
+   ->  Index Scan using idx_events_created_user on events  (cost=0.43..654083.95 rows=204340 width=54) (actual time=0.088..0.713 rows=100.00 loops=1)
+         Index Cond: (user_id = 9999999)
+         Index Searches: 1
+         Buffers: shared hit=130
+ Planning:
+   Buffers: shared hit=142
+ Planning Time: 0.513 ms
+ Execution Time: 0.761 ms
+(10 rows)
+
+
+@@@ sort.cleanup
+--- SQL
+DROP INDEX idx_events_created_user;
+CREATE INDEX idx_events_user_created ON events(user_id, created_at DESC);
+--- OUT
+

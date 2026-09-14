@@ -1,0 +1,1323 @@
+@@@ v10000.generate
+--- SQL
+-- вставлено 10000 строк, итого 10000
+--- OUT
+время генерации: 237 ms
+
+@@@ v10000.size
+--- SQL
+SELECT count(*) AS rows,
+       pg_size_pretty(pg_relation_size('events'))       AS table_size,
+       pg_size_pretty(pg_total_relation_size('events')) AS total_size,
+       pg_size_pretty(pg_indexes_size('events'))        AS indexes_size
+FROM events;
+--- OUT
+ rows  | table_size | total_size | indexes_size 
+-------+------------+------------+--------------
+ 10000 | 848 kB     | 1120 kB    | 240 kB
+(1 row)
+
+
+@@@ v10000.t4_noindex
+--- SQL
+EXPLAIN (ANALYZE, BUFFERS)
+SELECT * FROM events WHERE user_id = 123;
+--- OUT
+                                              QUERY PLAN                                              
+------------------------------------------------------------------------------------------------------
+ Seq Scan on events  (cost=0.00..231.00 rows=1 width=54) (actual time=0.927..0.928 rows=0.00 loops=1)
+   Filter: (user_id = 123)
+   Rows Removed by Filter: 10000
+   Buffers: shared hit=106
+ Planning:
+   Buffers: shared hit=72
+ Planning Time: 0.409 ms
+ Execution Time: 0.997 ms
+(8 rows)
+
+
+@@@ v10000.t6_noindex
+--- SQL
+EXPLAIN (ANALYZE, BUFFERS)
+SELECT * FROM events WHERE created_at >= NOW() - INTERVAL '1 day';
+--- OUT
+                                               QUERY PLAN                                               
+--------------------------------------------------------------------------------------------------------
+ Seq Scan on events  (cost=0.00..281.00 rows=33 width=54) (actual time=0.106..4.068 rows=31.00 loops=1)
+   Filter: (created_at >= (now() - '1 day'::interval))
+   Rows Removed by Filter: 9969
+   Buffers: shared hit=106
+ Planning:
+   Buffers: shared hit=74
+ Planning Time: 0.669 ms
+ Execution Time: 4.138 ms
+(8 rows)
+
+
+@@@ v10000.t7_noindex
+--- SQL
+EXPLAIN (ANALYZE, BUFFERS)
+SELECT * FROM events WHERE user_id = 123 ORDER BY created_at DESC LIMIT 100;
+--- OUT
+                                                    QUERY PLAN                                                    
+------------------------------------------------------------------------------------------------------------------
+ Limit  (cost=231.01..231.01 rows=1 width=54) (actual time=0.786..0.787 rows=0.00 loops=1)
+   Buffers: shared hit=109
+   ->  Sort  (cost=231.01..231.01 rows=1 width=54) (actual time=0.784..0.785 rows=0.00 loops=1)
+         Sort Key: created_at DESC
+         Sort Method: quicksort  Memory: 25kB
+         Buffers: shared hit=109
+         ->  Seq Scan on events  (cost=0.00..231.00 rows=1 width=54) (actual time=0.754..0.755 rows=0.00 loops=1)
+               Filter: (user_id = 123)
+               Rows Removed by Filter: 10000
+               Buffers: shared hit=106
+ Planning:
+   Buffers: shared hit=94
+ Planning Time: 0.430 ms
+ Execution Time: 0.841 ms
+(14 rows)
+
+
+@@@ v10000.t8_noindex
+--- SQL
+EXPLAIN (ANALYZE, BUFFERS)
+SELECT event_type, COUNT(*) FROM events
+WHERE created_at >= NOW() - INTERVAL '30 days'
+GROUP BY event_type;
+--- OUT
+                                                  QUERY PLAN                                                   
+---------------------------------------------------------------------------------------------------------------
+ HashAggregate  (cost=285.20..285.24 rows=4 width=15) (actual time=2.376..2.378 rows=4.00 loops=1)
+   Group Key: event_type
+   Batches: 1  Memory Usage: 32kB
+   Buffers: shared hit=106
+   ->  Seq Scan on events  (cost=0.00..281.00 rows=840 width=7) (actual time=0.013..2.206 rows=838.00 loops=1)
+         Filter: (created_at >= (now() - '30 days'::interval))
+         Rows Removed by Filter: 9162
+         Buffers: shared hit=106
+ Planning:
+   Buffers: shared hit=98
+ Planning Time: 0.418 ms
+ Execution Time: 2.442 ms
+(12 rows)
+
+
+@@@ v10000.create_user_idx
+--- SQL
+CREATE INDEX idx_events_user_id ON events(user_id);
+--- OUT
+
+@@@ v10000.t5_index
+--- SQL
+EXPLAIN (ANALYZE, BUFFERS)
+SELECT * FROM events WHERE user_id = 123;
+--- OUT
+                                                          QUERY PLAN                                                           
+-------------------------------------------------------------------------------------------------------------------------------
+ Index Scan using idx_events_user_id on events  (cost=0.29..8.30 rows=1 width=54) (actual time=0.029..0.030 rows=0.00 loops=1)
+   Index Cond: (user_id = 123)
+   Index Searches: 1
+   Buffers: shared hit=5
+ Planning:
+   Buffers: shared hit=89
+ Planning Time: 0.775 ms
+ Execution Time: 0.146 ms
+(8 rows)
+
+
+@@@ v10000.create_created_idx
+--- SQL
+CREATE INDEX idx_events_created_at ON events(created_at);
+--- OUT
+
+@@@ v10000.t6_index
+--- SQL
+EXPLAIN (ANALYZE, BUFFERS)
+SELECT * FROM events WHERE created_at >= NOW() - INTERVAL '1 day';
+--- OUT
+                                                            QUERY PLAN                                                             
+-----------------------------------------------------------------------------------------------------------------------------------
+ Bitmap Heap Scan on events  (cost=4.55..75.62 rows=33 width=54) (actual time=0.076..0.243 rows=31.00 loops=1)
+   Recheck Cond: (created_at >= (now() - '1 day'::interval))
+   Heap Blocks: exact=28
+   Buffers: shared hit=33
+   ->  Bitmap Index Scan on idx_events_created_at  (cost=0.00..4.54 rows=33 width=0) (actual time=0.048..0.048 rows=31.00 loops=1)
+         Index Cond: (created_at >= (now() - '1 day'::interval))
+         Index Searches: 1
+         Buffers: shared hit=5
+ Planning:
+   Buffers: shared hit=112
+ Planning Time: 0.895 ms
+ Execution Time: 0.361 ms
+(12 rows)
+
+
+@@@ v10000.t8_index
+--- SQL
+EXPLAIN (ANALYZE, BUFFERS)
+SELECT event_type, COUNT(*) FROM events
+WHERE created_at >= NOW() - INTERVAL '30 days'
+GROUP BY event_type;
+--- OUT
+                                                                 QUERY PLAN                                                                 
+--------------------------------------------------------------------------------------------------------------------------------------------
+ HashAggregate  (cost=143.70..143.74 rows=4 width=15) (actual time=0.681..0.684 rows=4.00 loops=1)
+   Group Key: event_type
+   Batches: 1  Memory Usage: 32kB
+   Buffers: shared hit=113
+   ->  Bitmap Heap Scan on events  (cost=18.80..139.50 rows=840 width=7) (actual time=0.136..0.483 rows=838.00 loops=1)
+         Recheck Cond: (created_at >= (now() - '30 days'::interval))
+         Heap Blocks: exact=106
+         Buffers: shared hit=113
+         ->  Bitmap Index Scan on idx_events_created_at  (cost=0.00..18.59 rows=840 width=0) (actual time=0.108..0.108 rows=838.00 loops=1)
+               Index Cond: (created_at >= (now() - '30 days'::interval))
+               Index Searches: 1
+               Buffers: shared hit=7
+ Planning:
+   Buffers: shared hit=144
+ Planning Time: 0.543 ms
+ Execution Time: 0.765 ms
+(16 rows)
+
+
+@@@ v10000.create_composite_idx
+--- SQL
+CREATE INDEX idx_events_user_created ON events(user_id, created_at DESC);
+--- OUT
+
+@@@ v10000.t7_index
+--- SQL
+EXPLAIN (ANALYZE, BUFFERS)
+SELECT * FROM events WHERE user_id = 123 ORDER BY created_at DESC LIMIT 100;
+--- OUT
+                                                                QUERY PLAN                                                                
+------------------------------------------------------------------------------------------------------------------------------------------
+ Limit  (cost=0.29..8.30 rows=1 width=54) (actual time=0.040..0.042 rows=0.00 loops=1)
+   Buffers: shared hit=5
+   ->  Index Scan using idx_events_user_created on events  (cost=0.29..8.30 rows=1 width=54) (actual time=0.038..0.038 rows=0.00 loops=1)
+         Index Cond: (user_id = 123)
+         Index Searches: 1
+         Buffers: shared hit=5
+ Planning:
+   Buffers: shared hit=144
+ Planning Time: 1.093 ms
+ Execution Time: 0.119 ms
+(10 rows)
+
+
+@@@ v10000.index_sizes
+--- SQL
+SELECT indexrelname AS index_name,
+       pg_size_pretty(pg_relation_size(indexrelid)) AS index_size
+FROM pg_stat_user_indexes
+WHERE schemaname='krasova_lab2' AND relname='events'
+ORDER BY pg_relation_size(indexrelid) DESC;
+--- OUT
+       index_name        | index_size 
+-------------------------+------------
+ idx_events_user_created | 328 kB
+ events_pkey             | 240 kB
+ idx_events_user_id      | 240 kB
+ idx_events_created_at   | 240 kB
+(4 rows)
+
+
+@@@ v100000.generate
+--- SQL
+-- вставлено 90000 строк, итого 100000
+--- OUT
+время генерации: 470 ms
+
+@@@ v100000.size
+--- SQL
+SELECT count(*) AS rows,
+       pg_size_pretty(pg_relation_size('events'))       AS table_size,
+       pg_size_pretty(pg_total_relation_size('events')) AS total_size,
+       pg_size_pretty(pg_indexes_size('events'))        AS indexes_size
+FROM events;
+--- OUT
+  rows  | table_size | total_size | indexes_size 
+--------+------------+------------+--------------
+ 100000 | 8424 kB    | 10 MB      | 2208 kB
+(1 row)
+
+
+@@@ v100000.t4_noindex
+--- SQL
+EXPLAIN (ANALYZE, BUFFERS)
+SELECT * FROM events WHERE user_id = 123;
+--- OUT
+                                              QUERY PLAN                                               
+-------------------------------------------------------------------------------------------------------
+ Seq Scan on events  (cost=0.00..2303.00 rows=2 width=54) (actual time=9.975..9.976 rows=0.00 loops=1)
+   Filter: (user_id = 123)
+   Rows Removed by Filter: 100000
+   Buffers: shared hit=1053
+ Planning:
+   Buffers: shared hit=72
+ Planning Time: 0.555 ms
+ Execution Time: 10.074 ms
+(8 rows)
+
+
+@@@ v100000.t6_noindex
+--- SQL
+EXPLAIN (ANALYZE, BUFFERS)
+SELECT * FROM events WHERE created_at >= NOW() - INTERVAL '1 day';
+--- OUT
+                                                 QUERY PLAN                                                 
+------------------------------------------------------------------------------------------------------------
+ Seq Scan on events  (cost=0.00..2803.00 rows=285 width=54) (actual time=0.074..25.746 rows=272.00 loops=1)
+   Filter: (created_at >= (now() - '1 day'::interval))
+   Rows Removed by Filter: 99728
+   Buffers: shared hit=1053
+ Planning:
+   Buffers: shared hit=74
+ Planning Time: 0.547 ms
+ Execution Time: 25.809 ms
+(8 rows)
+
+
+@@@ v100000.t7_noindex
+--- SQL
+EXPLAIN (ANALYZE, BUFFERS)
+SELECT * FROM events WHERE user_id = 123 ORDER BY created_at DESC LIMIT 100;
+--- OUT
+                                                     QUERY PLAN                                                      
+---------------------------------------------------------------------------------------------------------------------
+ Limit  (cost=2303.01..2303.02 rows=2 width=54) (actual time=10.574..10.576 rows=0.00 loops=1)
+   Buffers: shared hit=1056
+   ->  Sort  (cost=2303.01..2303.02 rows=2 width=54) (actual time=10.571..10.572 rows=0.00 loops=1)
+         Sort Key: created_at DESC
+         Sort Method: quicksort  Memory: 25kB
+         Buffers: shared hit=1056
+         ->  Seq Scan on events  (cost=0.00..2303.00 rows=2 width=54) (actual time=10.539..10.540 rows=0.00 loops=1)
+               Filter: (user_id = 123)
+               Rows Removed by Filter: 100000
+               Buffers: shared hit=1053
+ Planning:
+   Buffers: shared hit=94
+ Planning Time: 0.558 ms
+ Execution Time: 10.658 ms
+(14 rows)
+
+
+@@@ v100000.t8_noindex
+--- SQL
+EXPLAIN (ANALYZE, BUFFERS)
+SELECT event_type, COUNT(*) FROM events
+WHERE created_at >= NOW() - INTERVAL '30 days'
+GROUP BY event_type;
+--- OUT
+                                                    QUERY PLAN                                                     
+-------------------------------------------------------------------------------------------------------------------
+ HashAggregate  (cost=2844.35..2844.39 rows=4 width=15) (actual time=29.745..29.750 rows=4.00 loops=1)
+   Group Key: event_type
+   Batches: 1  Memory Usage: 32kB
+   Buffers: shared hit=1053
+   ->  Seq Scan on events  (cost=0.00..2803.00 rows=8270 width=7) (actual time=0.014..27.672 rows=8188.00 loops=1)
+         Filter: (created_at >= (now() - '30 days'::interval))
+         Rows Removed by Filter: 91812
+         Buffers: shared hit=1053
+ Planning:
+   Buffers: shared hit=101
+ Planning Time: 0.499 ms
+ Execution Time: 29.829 ms
+(12 rows)
+
+
+@@@ v100000.create_user_idx
+--- SQL
+CREATE INDEX idx_events_user_id ON events(user_id);
+--- OUT
+
+@@@ v100000.t5_index
+--- SQL
+EXPLAIN (ANALYZE, BUFFERS)
+SELECT * FROM events WHERE user_id = 123;
+--- OUT
+                                                          QUERY PLAN                                                          
+------------------------------------------------------------------------------------------------------------------------------
+ Bitmap Heap Scan on events  (cost=4.31..12.07 rows=2 width=54) (actual time=0.034..0.035 rows=0.00 loops=1)
+   Recheck Cond: (user_id = 123)
+   Buffers: shared hit=5
+   ->  Bitmap Index Scan on idx_events_user_id  (cost=0.00..4.31 rows=2 width=0) (actual time=0.028..0.029 rows=0.00 loops=1)
+         Index Cond: (user_id = 123)
+         Index Searches: 1
+         Buffers: shared hit=5
+ Planning:
+   Buffers: shared hit=89
+ Planning Time: 0.524 ms
+ Execution Time: 0.125 ms
+(11 rows)
+
+
+@@@ v100000.create_created_idx
+--- SQL
+CREATE INDEX idx_events_created_at ON events(created_at);
+--- OUT
+
+@@@ v100000.t6_index
+--- SQL
+EXPLAIN (ANALYZE, BUFFERS)
+SELECT * FROM events WHERE created_at >= NOW() - INTERVAL '1 day';
+--- OUT
+                                                             QUERY PLAN                                                              
+-------------------------------------------------------------------------------------------------------------------------------------
+ Bitmap Heap Scan on events  (cost=6.51..649.66 rows=285 width=54) (actual time=0.122..1.182 rows=272.00 loops=1)
+   Recheck Cond: (created_at >= (now() - '1 day'::interval))
+   Heap Blocks: exact=240
+   Buffers: shared hit=246
+   ->  Bitmap Index Scan on idx_events_created_at  (cost=0.00..6.44 rows=285 width=0) (actual time=0.067..0.067 rows=272.00 loops=1)
+         Index Cond: (created_at >= (now() - '1 day'::interval))
+         Index Searches: 1
+         Buffers: shared hit=6
+ Planning:
+   Buffers: shared hit=112
+ Planning Time: 0.550 ms
+ Execution Time: 1.258 ms
+(12 rows)
+
+
+@@@ v100000.t8_index
+--- SQL
+EXPLAIN (ANALYZE, BUFFERS)
+SELECT event_type, COUNT(*) FROM events
+WHERE created_at >= NOW() - INTERVAL '30 days'
+GROUP BY event_type;
+--- OUT
+                                                                  QUERY PLAN                                                                   
+-----------------------------------------------------------------------------------------------------------------------------------------------
+ HashAggregate  (cost=1395.46..1395.50 rows=4 width=15) (actual time=10.249..10.254 rows=4.00 loops=1)
+   Group Key: event_type
+   Batches: 1  Memory Usage: 32kB
+   Buffers: shared hit=1081
+   ->  Bitmap Heap Scan on events  (cost=156.39..1354.11 rows=8270 width=7) (actual time=1.849..7.074 rows=8188.00 loops=1)
+         Recheck Cond: (created_at >= (now() - '30 days'::interval))
+         Heap Blocks: exact=1053
+         Buffers: shared hit=1081
+         ->  Bitmap Index Scan on idx_events_created_at  (cost=0.00..154.32 rows=8270 width=0) (actual time=1.439..1.440 rows=8188.00 loops=1)
+               Index Cond: (created_at >= (now() - '30 days'::interval))
+               Index Searches: 1
+               Buffers: shared hit=28
+ Planning:
+   Buffers: shared hit=147
+ Planning Time: 1.506 ms
+ Execution Time: 10.572 ms
+(16 rows)
+
+
+@@@ v100000.create_composite_idx
+--- SQL
+CREATE INDEX idx_events_user_created ON events(user_id, created_at DESC);
+--- OUT
+
+@@@ v100000.t7_index
+--- SQL
+EXPLAIN (ANALYZE, BUFFERS)
+SELECT * FROM events WHERE user_id = 123 ORDER BY created_at DESC LIMIT 100;
+--- OUT
+                                                                QUERY PLAN                                                                
+------------------------------------------------------------------------------------------------------------------------------------------
+ Limit  (cost=12.08..12.09 rows=2 width=54) (actual time=0.069..0.071 rows=0.00 loops=1)
+   Buffers: shared hit=8
+   ->  Sort  (cost=12.08..12.09 rows=2 width=54) (actual time=0.067..0.068 rows=0.00 loops=1)
+         Sort Key: created_at DESC
+         Sort Method: quicksort  Memory: 25kB
+         Buffers: shared hit=8
+         ->  Bitmap Heap Scan on events  (cost=4.31..12.07 rows=2 width=54) (actual time=0.031..0.031 rows=0.00 loops=1)
+               Recheck Cond: (user_id = 123)
+               Buffers: shared hit=5
+               ->  Bitmap Index Scan on idx_events_user_id  (cost=0.00..4.31 rows=2 width=0) (actual time=0.017..0.018 rows=0.00 loops=1)
+                     Index Cond: (user_id = 123)
+                     Index Searches: 1
+                     Buffers: shared hit=5
+ Planning:
+   Buffers: shared hit=144
+ Planning Time: 1.075 ms
+ Execution Time: 0.180 ms
+(17 rows)
+
+
+@@@ v100000.index_sizes
+--- SQL
+SELECT indexrelname AS index_name,
+       pg_size_pretty(pg_relation_size(indexrelid)) AS index_size
+FROM pg_stat_user_indexes
+WHERE schemaname='krasova_lab2' AND relname='events'
+ORDER BY pg_relation_size(indexrelid) DESC;
+--- OUT
+       index_name        | index_size 
+-------------------------+------------
+ idx_events_user_created | 3104 kB
+ events_pkey             | 2208 kB
+ idx_events_created_at   | 2208 kB
+ idx_events_user_id      | 1936 kB
+(4 rows)
+
+
+@@@ v1000000.generate
+--- SQL
+-- вставлено 900000 строк, итого 1000000
+--- OUT
+время генерации: 3741 ms
+
+@@@ v1000000.size
+--- SQL
+SELECT count(*) AS rows,
+       pg_size_pretty(pg_relation_size('events'))       AS table_size,
+       pg_size_pretty(pg_total_relation_size('events')) AS total_size,
+       pg_size_pretty(pg_indexes_size('events'))        AS indexes_size
+FROM events;
+--- OUT
+  rows   | table_size | total_size | indexes_size 
+---------+------------+------------+--------------
+ 1000000 | 82 MB      | 104 MB     | 21 MB
+(1 row)
+
+
+@@@ v1000000.t4_noindex
+--- SQL
+EXPLAIN (ANALYZE, BUFFERS)
+SELECT * FROM events WHERE user_id = 123;
+--- OUT
+                                                       QUERY PLAN                                                       
+------------------------------------------------------------------------------------------------------------------------
+ Gather  (cost=1000.00..16732.43 rows=11 width=54) (actual time=18.250..36.814 rows=9.00 loops=1)
+   Workers Planned: 2
+   Workers Launched: 2
+   Buffers: shared hit=10523
+   ->  Parallel Seq Scan on events  (cost=0.00..15731.33 rows=5 width=54) (actual time=9.588..28.931 rows=3.00 loops=3)
+         Filter: (user_id = 123)
+         Rows Removed by Filter: 333330
+         Buffers: shared hit=10523
+ Planning:
+   Buffers: shared hit=69
+ Planning Time: 0.382 ms
+ Execution Time: 36.906 ms
+(12 rows)
+
+
+@@@ v1000000.t6_noindex
+--- SQL
+EXPLAIN (ANALYZE, BUFFERS)
+SELECT * FROM events WHERE created_at >= NOW() - INTERVAL '1 day';
+--- OUT
+                                                         QUERY PLAN                                                          
+-----------------------------------------------------------------------------------------------------------------------------
+ Gather  (cost=1000.00..19090.37 rows=2757 width=54) (actual time=0.492..86.643 rows=2744.00 loops=1)
+   Workers Planned: 2
+   Workers Launched: 2
+   Buffers: shared hit=10523
+   ->  Parallel Seq Scan on events  (cost=0.00..17814.67 rows=1149 width=54) (actual time=0.155..77.265 rows=914.67 loops=3)
+         Filter: (created_at >= (now() - '1 day'::interval))
+         Rows Removed by Filter: 332419
+         Buffers: shared hit=10523
+ Planning:
+   Buffers: shared hit=74
+ Planning Time: 0.392 ms
+ Execution Time: 86.826 ms
+(12 rows)
+
+
+@@@ v1000000.t7_noindex
+--- SQL
+EXPLAIN (ANALYZE, BUFFERS)
+SELECT * FROM events WHERE user_id = 123 ORDER BY created_at DESC LIMIT 100;
+--- OUT
+                                                             QUERY PLAN                                                              
+-------------------------------------------------------------------------------------------------------------------------------------
+ Limit  (cost=16732.62..16732.65 rows=11 width=54) (actual time=27.598..31.091 rows=9.00 loops=1)
+   Buffers: shared hit=10526
+   ->  Sort  (cost=16732.62..16732.65 rows=11 width=54) (actual time=27.595..31.086 rows=9.00 loops=1)
+         Sort Key: created_at DESC
+         Sort Method: quicksort  Memory: 26kB
+         Buffers: shared hit=10526
+         ->  Gather  (cost=1000.00..16732.43 rows=11 width=54) (actual time=6.757..31.051 rows=9.00 loops=1)
+               Workers Planned: 2
+               Workers Launched: 2
+               Buffers: shared hit=10523
+               ->  Parallel Seq Scan on events  (cost=0.00..15731.33 rows=5 width=54) (actual time=11.336..24.029 rows=3.00 loops=3)
+                     Filter: (user_id = 123)
+                     Rows Removed by Filter: 333330
+                     Buffers: shared hit=10523
+ Planning:
+   Buffers: shared hit=94
+ Planning Time: 0.448 ms
+ Execution Time: 31.143 ms
+(18 rows)
+
+
+@@@ v1000000.t8_noindex
+--- SQL
+EXPLAIN (ANALYZE, BUFFERS)
+SELECT event_type, COUNT(*) FROM events
+WHERE created_at >= NOW() - INTERVAL '30 days'
+GROUP BY event_type;
+--- OUT
+                                                                   QUERY PLAN                                                                    
+-------------------------------------------------------------------------------------------------------------------------------------------------
+ Finalize GroupAggregate  (cost=18992.15..18993.40 rows=4 width=15) (actual time=88.569..92.287 rows=4.00 loops=1)
+   Group Key: event_type
+   Buffers: shared hit=10539
+   ->  Gather Merge  (cost=18992.15..18993.31 rows=10 width=15) (actual time=88.559..92.275 rows=12.00 loops=1)
+         Workers Planned: 2
+         Workers Launched: 2
+         Buffers: shared hit=10539
+         ->  Sort  (cost=17992.12..17992.13 rows=4 width=15) (actual time=82.425..82.427 rows=4.00 loops=3)
+               Sort Key: event_type
+               Sort Method: quicksort  Memory: 25kB
+               Buffers: shared hit=10539
+               Worker 0:  Sort Method: quicksort  Memory: 25kB
+               Worker 1:  Sort Method: quicksort  Memory: 25kB
+               ->  Partial HashAggregate  (cost=17992.04..17992.08 rows=4 width=15) (actual time=82.314..82.316 rows=4.00 loops=3)
+                     Group Key: event_type
+                     Batches: 1  Memory Usage: 32kB
+                     Buffers: shared hit=10523
+                     Worker 0:  Batches: 1  Memory Usage: 32kB
+                     Worker 1:  Batches: 1  Memory Usage: 32kB
+                     ->  Parallel Seq Scan on events  (cost=0.00..17814.67 rows=35475 width=7) (actual time=0.039..76.572 rows=27421.00 loops=3)
+                           Filter: (created_at >= (now() - '30 days'::interval))
+                           Rows Removed by Filter: 305912
+                           Buffers: shared hit=10523
+ Planning:
+   Buffers: shared hit=101
+ Planning Time: 1.061 ms
+ Execution Time: 92.558 ms
+(27 rows)
+
+
+@@@ v1000000.create_user_idx
+--- SQL
+CREATE INDEX idx_events_user_id ON events(user_id);
+--- OUT
+
+@@@ v1000000.t5_index
+--- SQL
+EXPLAIN (ANALYZE, BUFFERS)
+SELECT * FROM events WHERE user_id = 123;
+--- OUT
+                                                          QUERY PLAN                                                           
+-------------------------------------------------------------------------------------------------------------------------------
+ Bitmap Heap Scan on events  (cost=4.51..47.58 rows=11 width=54) (actual time=0.038..0.090 rows=9.00 loops=1)
+   Recheck Cond: (user_id = 123)
+   Heap Blocks: exact=9
+   Buffers: shared hit=15
+   ->  Bitmap Index Scan on idx_events_user_id  (cost=0.00..4.51 rows=11 width=0) (actual time=0.024..0.025 rows=9.00 loops=1)
+         Index Cond: (user_id = 123)
+         Index Searches: 1
+         Buffers: shared hit=6
+ Planning:
+   Buffers: shared hit=86
+ Planning Time: 0.321 ms
+ Execution Time: 0.151 ms
+(12 rows)
+
+
+@@@ v1000000.create_created_idx
+--- SQL
+CREATE INDEX idx_events_created_at ON events(created_at);
+--- OUT
+
+@@@ v1000000.t6_index
+--- SQL
+EXPLAIN (ANALYZE, BUFFERS)
+SELECT * FROM events WHERE created_at >= NOW() - INTERVAL '1 day';
+--- OUT
+                                                               QUERY PLAN                                                               
+----------------------------------------------------------------------------------------------------------------------------------------
+ Bitmap Heap Scan on events  (cost=53.80..6333.56 rows=2757 width=54) (actual time=2.738..15.268 rows=2744.00 loops=1)
+   Recheck Cond: (created_at >= (now() - '1 day'::interval))
+   Heap Blocks: exact=2443
+   Buffers: shared hit=2457
+   ->  Bitmap Index Scan on idx_events_created_at  (cost=0.00..53.11 rows=2757 width=0) (actual time=1.516..1.517 rows=2744.00 loops=1)
+         Index Cond: (created_at >= (now() - '1 day'::interval))
+         Index Searches: 1
+         Buffers: shared hit=14
+ Planning:
+   Buffers: shared hit=113
+ Planning Time: 1.290 ms
+ Execution Time: 15.674 ms
+(12 rows)
+
+
+@@@ v1000000.t8_index
+--- SQL
+EXPLAIN (ANALYZE, BUFFERS)
+SELECT event_type, COUNT(*) FROM events
+WHERE created_at >= NOW() - INTERVAL '30 days'
+GROUP BY event_type;
+--- OUT
+                                                                             QUERY PLAN                                                                             
+--------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ Finalize GroupAggregate  (cost=13917.56..13918.81 rows=4 width=15) (actual time=42.335..53.612 rows=4.00 loops=1)
+   Group Key: event_type
+   Buffers: shared hit=10807
+   ->  Gather Merge  (cost=13917.56..13918.72 rows=10 width=15) (actual time=42.316..53.590 rows=12.00 loops=1)
+         Workers Planned: 2
+         Workers Launched: 2
+         Buffers: shared hit=10807
+         ->  Sort  (cost=12917.53..12917.54 rows=4 width=15) (actual time=38.733..38.737 rows=4.00 loops=3)
+               Sort Key: event_type
+               Sort Method: quicksort  Memory: 25kB
+               Buffers: shared hit=10807
+               Worker 0:  Sort Method: quicksort  Memory: 25kB
+               Worker 1:  Sort Method: quicksort  Memory: 25kB
+               ->  Partial HashAggregate  (cost=12917.45..12917.49 rows=4 width=15) (actual time=38.662..38.668 rows=4.00 loops=3)
+                     Group Key: event_type
+                     Batches: 1  Memory Usage: 32kB
+                     Buffers: shared hit=10791
+                     Worker 0:  Batches: 1  Memory Usage: 32kB
+                     Worker 1:  Batches: 1  Memory Usage: 32kB
+                     ->  Parallel Bitmap Heap Scan on events  (cost=1596.26..12740.08 rows=35475 width=7) (actual time=8.628..29.895 rows=27421.00 loops=3)
+                           Recheck Cond: (created_at >= (now() - '30 days'::interval))
+                           Heap Blocks: exact=3574
+                           Buffers: shared hit=10791
+                           Worker 0:  Heap Blocks: exact=3422
+                           Worker 1:  Heap Blocks: exact=3524
+                           ->  Bitmap Index Scan on idx_events_created_at  (cost=0.00..1574.98 rows=85140 width=0) (actual time=8.705..8.706 rows=82263.00 loops=1)
+                                 Index Cond: (created_at >= (now() - '30 days'::interval))
+                                 Index Searches: 1
+                                 Buffers: shared hit=231
+ Planning:
+   Buffers: shared hit=147
+ Planning Time: 0.776 ms
+ Execution Time: 53.760 ms
+(33 rows)
+
+
+@@@ v1000000.create_composite_idx
+--- SQL
+CREATE INDEX idx_events_user_created ON events(user_id, created_at DESC);
+--- OUT
+
+@@@ v1000000.t7_index
+--- SQL
+EXPLAIN (ANALYZE, BUFFERS)
+SELECT * FROM events WHERE user_id = 123 ORDER BY created_at DESC LIMIT 100;
+--- OUT
+                                                                   QUERY PLAN                                                                   
+------------------------------------------------------------------------------------------------------------------------------------------------
+ Limit  (cost=47.77..47.80 rows=11 width=54) (actual time=0.244..0.249 rows=9.00 loops=1)
+   Buffers: shared hit=18
+   ->  Sort  (cost=47.77..47.80 rows=11 width=54) (actual time=0.241..0.244 rows=9.00 loops=1)
+         Sort Key: created_at DESC
+         Sort Method: quicksort  Memory: 26kB
+         Buffers: shared hit=18
+         ->  Bitmap Heap Scan on events  (cost=4.51..47.58 rows=11 width=54) (actual time=0.078..0.197 rows=9.00 loops=1)
+               Recheck Cond: (user_id = 123)
+               Heap Blocks: exact=9
+               Buffers: shared hit=15
+               ->  Bitmap Index Scan on idx_events_user_created  (cost=0.00..4.51 rows=11 width=0) (actual time=0.038..0.038 rows=9.00 loops=1)
+                     Index Cond: (user_id = 123)
+                     Index Searches: 1
+                     Buffers: shared hit=6
+ Planning:
+   Buffers: shared hit=144
+ Planning Time: 1.091 ms
+ Execution Time: 0.356 ms
+(18 rows)
+
+
+@@@ v1000000.index_sizes
+--- SQL
+SELECT indexrelname AS index_name,
+       pg_size_pretty(pg_relation_size(indexrelid)) AS index_size
+FROM pg_stat_user_indexes
+WHERE schemaname='krasova_lab2' AND relname='events'
+ORDER BY pg_relation_size(indexrelid) DESC;
+--- OUT
+       index_name        | index_size 
+-------------------------+------------
+ idx_events_user_created | 30 MB
+ events_pkey             | 21 MB
+ idx_events_created_at   | 21 MB
+ idx_events_user_id      | 9088 kB
+(4 rows)
+
+
+@@@ v5000000.generate
+--- SQL
+-- вставлено 4000000 строк, итого 5000000
+--- OUT
+время генерации: 16279 ms
+
+@@@ v5000000.size
+--- SQL
+SELECT count(*) AS rows,
+       pg_size_pretty(pg_relation_size('events'))       AS table_size,
+       pg_size_pretty(pg_total_relation_size('events')) AS total_size,
+       pg_size_pretty(pg_indexes_size('events'))        AS indexes_size
+FROM events;
+--- OUT
+  rows   | table_size | total_size | indexes_size 
+---------+------------+------------+--------------
+ 5000000 | 411 MB     | 518 MB     | 107 MB
+(1 row)
+
+
+@@@ v5000000.t4_noindex
+--- SQL
+EXPLAIN (ANALYZE, BUFFERS)
+SELECT * FROM events WHERE user_id = 123;
+--- OUT
+                                                         QUERY PLAN                                                         
+----------------------------------------------------------------------------------------------------------------------------
+ Gather  (cost=1000.00..79658.55 rows=50 width=54) (actual time=6.995..127.007 rows=40.00 loops=1)
+   Workers Planned: 2
+   Workers Launched: 2
+   Buffers: shared hit=15609 read=37003 written=34
+   ->  Parallel Seq Scan on events  (cost=0.00..78653.55 rows=21 width=54) (actual time=11.419..117.403 rows=13.33 loops=3)
+         Filter: (user_id = 123)
+         Rows Removed by Filter: 1666653
+         Buffers: shared hit=15609 read=37003 written=34
+ Planning:
+   Buffers: shared hit=69
+ Planning Time: 0.337 ms
+ Execution Time: 127.100 ms
+(12 rows)
+
+
+@@@ v5000000.t6_noindex
+--- SQL
+EXPLAIN (ANALYZE, BUFFERS)
+SELECT * FROM events WHERE created_at >= NOW() - INTERVAL '1 day';
+--- OUT
+                                                          QUERY PLAN                                                           
+-------------------------------------------------------------------------------------------------------------------------------
+ Gather  (cost=1000.00..91357.27 rows=12871 width=54) (actual time=0.599..370.009 rows=13691.00 loops=1)
+   Workers Planned: 2
+   Workers Launched: 2
+   Buffers: shared hit=15945 read=36667 written=151
+   ->  Parallel Seq Scan on events  (cost=0.00..89070.17 rows=5363 width=54) (actual time=0.351..359.847 rows=4563.67 loops=3)
+         Filter: (created_at >= (now() - '1 day'::interval))
+         Rows Removed by Filter: 1662103
+         Buffers: shared hit=15945 read=36667 written=151
+ Planning:
+   Buffers: shared hit=74
+ Planning Time: 0.371 ms
+ Execution Time: 370.702 ms
+(12 rows)
+
+
+@@@ v5000000.t7_noindex
+--- SQL
+EXPLAIN (ANALYZE, BUFFERS)
+SELECT * FROM events WHERE user_id = 123 ORDER BY created_at DESC LIMIT 100;
+--- OUT
+                                                              QUERY PLAN                                                               
+---------------------------------------------------------------------------------------------------------------------------------------
+ Limit  (cost=79654.04..79659.86 rows=50 width=54) (actual time=128.232..132.892 rows=40.00 loops=1)
+   Buffers: shared hit=16036 read=36650 written=33
+   ->  Gather Merge  (cost=79654.04..79659.86 rows=50 width=54) (actual time=128.229..132.882 rows=40.00 loops=1)
+         Workers Planned: 2
+         Workers Launched: 2
+         Buffers: shared hit=16036 read=36650 written=33
+         ->  Sort  (cost=78654.01..78654.07 rows=21 width=54) (actual time=124.823..124.826 rows=13.33 loops=3)
+               Sort Key: created_at DESC
+               Sort Method: quicksort  Memory: 27kB
+               Buffers: shared hit=16036 read=36650 written=33
+               Worker 0:  Sort Method: quicksort  Memory: 26kB
+               Worker 1:  Sort Method: quicksort  Memory: 26kB
+               ->  Parallel Seq Scan on events  (cost=0.00..78653.55 rows=21 width=54) (actual time=9.611..124.688 rows=13.33 loops=3)
+                     Filter: (user_id = 123)
+                     Rows Removed by Filter: 1666653
+                     Buffers: shared hit=15962 read=36650 written=33
+ Planning:
+   Buffers: shared hit=94
+ Planning Time: 0.747 ms
+ Execution Time: 132.993 ms
+(20 rows)
+
+
+@@@ v5000000.t8_noindex
+--- SQL
+EXPLAIN (ANALYZE, BUFFERS)
+SELECT event_type, COUNT(*) FROM events
+WHERE created_at >= NOW() - INTERVAL '30 days'
+GROUP BY event_type;
+--- OUT
+                                                                     QUERY PLAN                                                                     
+----------------------------------------------------------------------------------------------------------------------------------------------------
+ Finalize GroupAggregate  (cost=90926.08..90927.33 rows=4 width=15) (actual time=392.308..396.621 rows=4.00 loops=1)
+   Group Key: event_type
+   Buffers: shared hit=15962 read=36666
+   ->  Gather Merge  (cost=90926.08..90927.24 rows=10 width=15) (actual time=392.299..396.610 rows=12.00 loops=1)
+         Workers Planned: 2
+         Workers Launched: 2
+         Buffers: shared hit=15962 read=36666
+         ->  Sort  (cost=89926.05..89926.06 rows=4 width=15) (actual time=388.595..388.596 rows=4.00 loops=3)
+               Sort Key: event_type
+               Sort Method: quicksort  Memory: 25kB
+               Buffers: shared hit=15962 read=36666
+               Worker 0:  Sort Method: quicksort  Memory: 25kB
+               Worker 1:  Sort Method: quicksort  Memory: 25kB
+               ->  Partial HashAggregate  (cost=89925.97..89926.01 rows=4 width=15) (actual time=388.520..388.522 rows=4.00 loops=3)
+                     Group Key: event_type
+                     Batches: 1  Memory Usage: 32kB
+                     Buffers: shared hit=15946 read=36666
+                     Worker 0:  Batches: 1  Memory Usage: 32kB
+                     Worker 1:  Batches: 1  Memory Usage: 32kB
+                     ->  Parallel Seq Scan on events  (cost=0.00..89070.17 rows=171160 width=7) (actual time=0.440..361.041 rows=136791.33 loops=3)
+                           Filter: (created_at >= (now() - '30 days'::interval))
+                           Rows Removed by Filter: 1529875
+                           Buffers: shared hit=15946 read=36666
+ Planning:
+   Buffers: shared hit=101
+ Planning Time: 0.505 ms
+ Execution Time: 396.739 ms
+(27 rows)
+
+
+@@@ v5000000.create_user_idx
+--- SQL
+CREATE INDEX idx_events_user_id ON events(user_id);
+--- OUT
+
+@@@ v5000000.t5_index
+--- SQL
+EXPLAIN (ANALYZE, BUFFERS)
+SELECT * FROM events WHERE user_id = 123;
+--- OUT
+                                                           QUERY PLAN                                                           
+--------------------------------------------------------------------------------------------------------------------------------
+ Bitmap Heap Scan on events  (cost=4.82..200.82 rows=50 width=54) (actual time=0.059..0.250 rows=40.00 loops=1)
+   Recheck Cond: (user_id = 123)
+   Heap Blocks: exact=40
+   Buffers: shared hit=46
+   ->  Bitmap Index Scan on idx_events_user_id  (cost=0.00..4.81 rows=50 width=0) (actual time=0.042..0.043 rows=40.00 loops=1)
+         Index Cond: (user_id = 123)
+         Index Searches: 1
+         Buffers: shared hit=6
+ Planning:
+   Buffers: shared hit=86
+ Planning Time: 0.559 ms
+ Execution Time: 0.360 ms
+(12 rows)
+
+
+@@@ v5000000.create_created_idx
+--- SQL
+CREATE INDEX idx_events_created_at ON events(created_at);
+--- OUT
+
+@@@ v5000000.t6_index
+--- SQL
+EXPLAIN (ANALYZE, BUFFERS)
+SELECT * FROM events WHERE created_at >= NOW() - INTERVAL '1 day';
+--- OUT
+                                                                QUERY PLAN                                                                 
+-------------------------------------------------------------------------------------------------------------------------------------------
+ Bitmap Heap Scan on events  (cost=244.60..30361.95 rows=12924 width=54) (actual time=4.392..24.979 rows=13691.00 loops=1)
+   Recheck Cond: (created_at >= (now() - '1 day'::interval))
+   Heap Blocks: exact=12050
+   Buffers: shared hit=12094
+   ->  Bitmap Index Scan on idx_events_created_at  (cost=0.00..241.37 rows=12924 width=0) (actual time=2.179..2.179 rows=13691.00 loops=1)
+         Index Cond: (created_at >= (now() - '1 day'::interval))
+         Index Searches: 1
+         Buffers: shared hit=44
+ Planning:
+   Buffers: shared hit=113
+ Planning Time: 0.484 ms
+ Execution Time: 25.701 ms
+(12 rows)
+
+
+@@@ v5000000.t8_index
+--- SQL
+EXPLAIN (ANALYZE, BUFFERS)
+SELECT event_type, COUNT(*) FROM events
+WHERE created_at >= NOW() - INTERVAL '30 days'
+GROUP BY event_type;
+--- OUT
+                                                                               QUERY PLAN                                                                               
+------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ Finalize GroupAggregate  (cost=65155.23..65156.49 rows=4 width=15) (actual time=260.435..267.555 rows=4.00 loops=1)
+   Group Key: event_type
+   Buffers: shared hit=59 read=53724
+   ->  Gather Merge  (cost=65155.23..65156.40 rows=10 width=15) (actual time=260.418..267.536 rows=12.00 loops=1)
+         Workers Planned: 2
+         Workers Launched: 2
+         Buffers: shared hit=59 read=53724
+         ->  Sort  (cost=64155.21..64155.22 rows=4 width=15) (actual time=254.830..254.833 rows=4.00 loops=3)
+               Sort Key: event_type
+               Sort Method: quicksort  Memory: 25kB
+               Buffers: shared hit=59 read=53724
+               Worker 0:  Sort Method: quicksort  Memory: 25kB
+               Worker 1:  Sort Method: quicksort  Memory: 25kB
+               ->  Partial HashAggregate  (cost=64155.13..64155.17 rows=4 width=15) (actual time=254.769..254.772 rows=4.00 loops=3)
+                     Group Key: event_type
+                     Batches: 1  Memory Usage: 32kB
+                     Buffers: shared hit=43 read=53724
+                     Worker 0:  Batches: 1  Memory Usage: 32kB
+                     Worker 1:  Batches: 1  Memory Usage: 32kB
+                     ->  Parallel Bitmap Heap Scan on events  (cost=7692.02..63299.33 rows=171160 width=7) (actual time=77.402..199.843 rows=136791.00 loops=3)
+                           Recheck Cond: (created_at >= (now() - '30 days'::interval))
+                           Heap Blocks: exact=15358
+                           Buffers: shared hit=43 read=53724
+                           Worker 0:  Heap Blocks: exact=18491
+                           Worker 1:  Heap Blocks: exact=18750
+                           ->  Bitmap Index Scan on idx_events_created_at  (cost=0.00..7589.32 rows=410785 width=0) (actual time=64.680..64.681 rows=410373.00 loops=1)
+                                 Index Cond: (created_at >= (now() - '30 days'::interval))
+                                 Index Searches: 1
+                                 Buffers: shared hit=3 read=1125
+ Planning:
+   Buffers: shared hit=118 read=29
+ Planning Time: 1.674 ms
+ Execution Time: 267.839 ms
+(33 rows)
+
+
+@@@ v5000000.create_composite_idx
+--- SQL
+CREATE INDEX idx_events_user_created ON events(user_id, created_at DESC);
+--- OUT
+
+@@@ v5000000.t7_index
+--- SQL
+EXPLAIN (ANALYZE, BUFFERS)
+SELECT * FROM events WHERE user_id = 123 ORDER BY created_at DESC LIMIT 100;
+--- OUT
+                                                                   QUERY PLAN                                                                    
+-------------------------------------------------------------------------------------------------------------------------------------------------
+ Limit  (cost=202.23..202.36 rows=50 width=54) (actual time=0.203..0.211 rows=40.00 loops=1)
+   Buffers: shared hit=49
+   ->  Sort  (cost=202.23..202.36 rows=50 width=54) (actual time=0.202..0.205 rows=40.00 loops=1)
+         Sort Key: created_at DESC
+         Sort Method: quicksort  Memory: 30kB
+         Buffers: shared hit=49
+         ->  Bitmap Heap Scan on events  (cost=4.82..200.82 rows=50 width=54) (actual time=0.036..0.170 rows=40.00 loops=1)
+               Recheck Cond: (user_id = 123)
+               Heap Blocks: exact=40
+               Buffers: shared hit=46
+               ->  Bitmap Index Scan on idx_events_user_created  (cost=0.00..4.81 rows=50 width=0) (actual time=0.019..0.020 rows=40.00 loops=1)
+                     Index Cond: (user_id = 123)
+                     Index Searches: 1
+                     Buffers: shared hit=6
+ Planning:
+   Buffers: shared hit=143
+ Planning Time: 0.552 ms
+ Execution Time: 0.287 ms
+(18 rows)
+
+
+@@@ v5000000.index_sizes
+--- SQL
+SELECT indexrelname AS index_name,
+       pg_size_pretty(pg_relation_size(indexrelid)) AS index_size
+FROM pg_stat_user_indexes
+WHERE schemaname='krasova_lab2' AND relname='events'
+ORDER BY pg_relation_size(indexrelid) DESC;
+--- OUT
+       index_name        | index_size 
+-------------------------+------------
+ idx_events_user_created | 150 MB
+ idx_events_created_at   | 107 MB
+ events_pkey             | 107 MB
+ idx_events_user_id      | 34 MB
+(4 rows)
+
+
+@@@ v10000000.generate
+--- SQL
+-- вставлено 5000000 строк, итого 10000000
+--- OUT
+время генерации: 17936 ms
+
+@@@ v10000000.size
+--- SQL
+SELECT count(*) AS rows,
+       pg_size_pretty(pg_relation_size('events'))       AS table_size,
+       pg_size_pretty(pg_total_relation_size('events')) AS total_size,
+       pg_size_pretty(pg_indexes_size('events'))        AS indexes_size
+FROM events;
+--- OUT
+   rows   | table_size | total_size | indexes_size 
+----------+------------+------------+--------------
+ 10000000 | 822 MB     | 1037 MB    | 214 MB
+(1 row)
+
+
+@@@ v10000000.t4_noindex
+--- SQL
+EXPLAIN (ANALYZE, BUFFERS)
+SELECT * FROM events WHERE user_id = 123;
+--- OUT
+                                                          QUERY PLAN                                                           
+-------------------------------------------------------------------------------------------------------------------------------
+ Gather  (cost=1000.00..158316.15 rows=99 width=54) (actual time=10.906..213.093 rows=84.00 loops=1)
+   Workers Planned: 2
+   Workers Launched: 2
+   Buffers: shared hit=15930 read=89293 written=198
+   ->  Parallel Seq Scan on events  (cost=0.00..157306.25 rows=41 width=54) (actual time=7.369..189.117 rows=28.00 loops=3)
+         Filter: (user_id = 123)
+         Rows Removed by Filter: 3333305
+         Buffers: shared hit=15930 read=89293 written=198
+ Planning:
+   Buffers: shared hit=72
+ Planning Time: 0.576 ms
+ JIT:
+   Functions: 6
+   Options: Inlining false, Optimization false, Expressions true, Deforming true
+   Timing: Generation 0.742 ms (Deform 0.277 ms), Inlining 0.000 ms, Optimization 0.714 ms, Emission 8.687 ms, Total 10.143 ms
+ Execution Time: 233.583 ms
+(16 rows)
+
+
+@@@ v10000000.t6_noindex
+--- SQL
+EXPLAIN (ANALYZE, BUFFERS)
+SELECT * FROM events WHERE created_at >= NOW() - INTERVAL '1 day';
+--- OUT
+                                                           QUERY PLAN                                                            
+---------------------------------------------------------------------------------------------------------------------------------
+ Gather  (cost=1000.00..181800.35 rows=26608 width=54) (actual time=4.463..700.178 rows=27343.00 loops=1)
+   Workers Planned: 2
+   Workers Launched: 2
+   Buffers: shared hit=15954 read=89269
+   ->  Parallel Seq Scan on events  (cost=0.00..178139.55 rows=11087 width=54) (actual time=4.163..671.999 rows=9114.33 loops=3)
+         Filter: (created_at >= (now() - '1 day'::interval))
+         Rows Removed by Filter: 3324219
+         Buffers: shared hit=15954 read=89269
+ Planning:
+   Buffers: shared hit=74
+ Planning Time: 0.334 ms
+ JIT:
+   Functions: 6
+   Options: Inlining false, Optimization false, Expressions true, Deforming true
+   Timing: Generation 0.903 ms (Deform 0.271 ms), Inlining 0.000 ms, Optimization 0.841 ms, Emission 10.636 ms, Total 12.381 ms
+ Execution Time: 720.847 ms
+(16 rows)
+
+
+@@@ v10000000.t7_noindex
+--- SQL
+EXPLAIN (ANALYZE, BUFFERS)
+SELECT * FROM events WHERE user_id = 123 ORDER BY created_at DESC LIMIT 100;
+--- OUT
+                                                               QUERY PLAN                                                                
+-----------------------------------------------------------------------------------------------------------------------------------------
+ Limit  (cost=158307.37..158318.79 rows=98 width=54) (actual time=232.295..238.336 rows=84.00 loops=1)
+   Buffers: shared hit=16034 read=89263
+   ->  Gather Merge  (cost=158307.37..158318.79 rows=98 width=54) (actual time=228.722..234.756 rows=84.00 loops=1)
+         Workers Planned: 2
+         Workers Launched: 2
+         Buffers: shared hit=16034 read=89263
+         ->  Sort  (cost=157307.35..157307.45 rows=41 width=54) (actual time=209.707..209.711 rows=28.00 loops=3)
+               Sort Key: created_at DESC
+               Sort Method: quicksort  Memory: 29kB
+               Buffers: shared hit=16034 read=89263
+               Worker 0:  Sort Method: quicksort  Memory: 28kB
+               Worker 1:  Sort Method: quicksort  Memory: 28kB
+               ->  Parallel Seq Scan on events  (cost=0.00..157306.25 rows=41 width=54) (actual time=23.852..209.569 rows=28.00 loops=3)
+                     Filter: (user_id = 123)
+                     Rows Removed by Filter: 3333305
+                     Buffers: shared hit=15960 read=89263
+ Planning:
+   Buffers: shared hit=94
+ Planning Time: 0.396 ms
+ JIT:
+   Functions: 7
+   Options: Inlining false, Optimization false, Expressions true, Deforming true
+   Timing: Generation 1.060 ms (Deform 0.200 ms), Inlining 0.000 ms, Optimization 0.887 ms, Emission 12.805 ms, Total 14.751 ms
+ Execution Time: 259.275 ms
+(24 rows)
+
+
+@@@ v10000000.t8_noindex
+--- SQL
+EXPLAIN (ANALYZE, BUFFERS)
+SELECT event_type, COUNT(*) FROM events
+WHERE created_at >= NOW() - INTERVAL '30 days'
+GROUP BY event_type;
+--- OUT
+                                                                     QUERY PLAN                                                                      
+-----------------------------------------------------------------------------------------------------------------------------------------------------
+ Finalize GroupAggregate  (cost=180885.48..180886.74 rows=4 width=15) (actual time=781.039..787.247 rows=4.00 loops=1)
+   Group Key: event_type
+   Buffers: shared hit=15963 read=89276
+   ->  Gather Merge  (cost=180885.48..180886.65 rows=10 width=15) (actual time=781.024..787.230 rows=12.00 loops=1)
+         Workers Planned: 2
+         Workers Launched: 2
+         Buffers: shared hit=15963 read=89276
+         ->  Sort  (cost=179885.46..179885.47 rows=4 width=15) (actual time=760.641..760.642 rows=4.00 loops=3)
+               Sort Key: event_type
+               Sort Method: quicksort  Memory: 25kB
+               Buffers: shared hit=15963 read=89276
+               Worker 0:  Sort Method: quicksort  Memory: 25kB
+               Worker 1:  Sort Method: quicksort  Memory: 25kB
+               ->  Partial HashAggregate  (cost=179885.38..179885.42 rows=4 width=15) (actual time=760.595..760.597 rows=4.00 loops=3)
+                     Group Key: event_type
+                     Batches: 1  Memory Usage: 32kB
+                     Buffers: shared hit=15947 read=89276
+                     Worker 0:  Batches: 1  Memory Usage: 32kB
+                     Worker 1:  Batches: 1  Memory Usage: 32kB
+                     ->  Parallel Seq Scan on events  (cost=0.00..178139.55 rows=349166 width=7) (actual time=9.216..710.766 rows=273963.67 loops=3)
+                           Filter: (created_at >= (now() - '30 days'::interval))
+                           Rows Removed by Filter: 3059370
+                           Buffers: shared hit=15947 read=89276
+ Planning:
+   Buffers: shared hit=101
+ Planning Time: 0.697 ms
+ JIT:
+   Functions: 33
+   Options: Inlining false, Optimization false, Expressions true, Deforming true
+   Timing: Generation 2.590 ms (Deform 0.892 ms), Inlining 0.000 ms, Optimization 1.527 ms, Emission 25.176 ms, Total 29.293 ms
+ Execution Time: 811.758 ms
+(31 rows)
+
+
+@@@ v10000000.create_user_idx
+--- SQL
+CREATE INDEX idx_events_user_id ON events(user_id);
+--- OUT
+
+@@@ v10000000.t5_index
+--- SQL
+EXPLAIN (ANALYZE, BUFFERS)
+SELECT * FROM events WHERE user_id = 123;
+--- OUT
+                                                           QUERY PLAN                                                           
+--------------------------------------------------------------------------------------------------------------------------------
+ Bitmap Heap Scan on events  (cost=5.20..393.33 rows=99 width=54) (actual time=0.054..0.280 rows=84.00 loops=1)
+   Recheck Cond: (user_id = 123)
+   Heap Blocks: exact=84
+   Buffers: shared hit=90
+   ->  Bitmap Index Scan on idx_events_user_id  (cost=0.00..5.18 rows=99 width=0) (actual time=0.033..0.033 rows=84.00 loops=1)
+         Index Cond: (user_id = 123)
+         Index Searches: 1
+         Buffers: shared hit=6
+ Planning:
+   Buffers: shared hit=89
+ Planning Time: 0.365 ms
+ Execution Time: 0.355 ms
+(12 rows)
+
+
+@@@ v10000000.create_created_idx
+--- SQL
+CREATE INDEX idx_events_created_at ON events(created_at);
+--- OUT
+
+@@@ v10000000.t6_index
+--- SQL
+EXPLAIN (ANALYZE, BUFFERS)
+SELECT * FROM events WHERE created_at >= NOW() - INTERVAL '1 day';
+--- OUT
+                                                                QUERY PLAN                                                                 
+-------------------------------------------------------------------------------------------------------------------------------------------
+ Bitmap Heap Scan on events  (cost=502.96..61938.26 rows=26648 width=54) (actual time=9.840..98.230 rows=27339.00 loops=1)
+   Recheck Cond: (created_at >= (now() - '1 day'::interval))
+   Heap Blocks: exact=24101
+   Buffers: shared hit=11 read=24171
+   ->  Bitmap Index Scan on idx_events_created_at  (cost=0.00..496.30 rows=26648 width=0) (actual time=4.865..4.866 rows=27339.00 loops=1)
+         Index Cond: (created_at >= (now() - '1 day'::interval))
+         Index Searches: 1
+         Buffers: shared hit=5 read=76
+ Planning:
+   Buffers: shared hit=110 read=3
+ Planning Time: 0.489 ms
+ Execution Time: 100.127 ms
+(12 rows)
+
+
+@@@ v10000000.t8_index
+--- SQL
+EXPLAIN (ANALYZE, BUFFERS)
+SELECT event_type, COUNT(*) FROM events
+WHERE created_at >= NOW() - INTERVAL '30 days'
+GROUP BY event_type;
+--- OUT
+                                                                               QUERY PLAN                                                                                
+-------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ Finalize GroupAggregate  (cost=175768.05..175769.31 rows=4 width=15) (actual time=781.450..791.910 rows=4.00 loops=1)
+   Group Key: event_type
+   Buffers: shared hit=59 read=107445
+   ->  Gather Merge  (cost=175768.05..175769.22 rows=10 width=15) (actual time=781.433..791.890 rows=12.00 loops=1)
+         Workers Planned: 2
+         Workers Launched: 2
+         Buffers: shared hit=59 read=107445
+         ->  Sort  (cost=174768.03..174768.04 rows=4 width=15) (actual time=762.523..762.526 rows=4.00 loops=3)
+               Sort Key: event_type
+               Sort Method: quicksort  Memory: 25kB
+               Buffers: shared hit=59 read=107445
+               Worker 0:  Sort Method: quicksort  Memory: 25kB
+               Worker 1:  Sort Method: quicksort  Memory: 25kB
+               ->  Partial HashAggregate  (cost=174767.95..174767.99 rows=4 width=15) (actual time=762.475..762.479 rows=4.00 loops=3)
+                     Group Key: event_type
+                     Batches: 1  Memory Usage: 32kB
+                     Buffers: shared hit=43 read=107445
+                     Worker 0:  Batches: 1  Memory Usage: 32kB
+                     Worker 1:  Batches: 1  Memory Usage: 32kB
+                     ->  Parallel Bitmap Heap Scan on events  (cost=15686.92..173022.12 rows=349165 width=7) (actual time=86.704..703.536 rows=273962.33 loops=3)
+                           Recheck Cond: (created_at >= (now() - '30 days'::interval))
+                           Rows Removed by Index Recheck: 1914540
+                           Heap Blocks: exact=13864 lossy=23549
+                           Buffers: shared hit=43 read=107445
+                           Worker 0:  Heap Blocks: exact=12630 lossy=21052
+                           Worker 1:  Heap Blocks: exact=12584 lossy=21517
+                           ->  Bitmap Index Scan on idx_events_created_at  (cost=0.00..15477.42 rows=837997 width=0) (actual time=92.166..92.166 rows=821887.00 loops=1)
+                                 Index Cond: (created_at >= (now() - '30 days'::interval))
+                                 Index Searches: 1
+                                 Buffers: shared hit=3 read=2249
+ Planning:
+   Buffers: shared hit=117 read=30
+ Planning Time: 0.901 ms
+ JIT:
+   Functions: 36
+   Options: Inlining false, Optimization false, Expressions true, Deforming true
+   Timing: Generation 1.999 ms (Deform 0.634 ms), Inlining 0.000 ms, Optimization 1.412 ms, Emission 22.025 ms, Total 25.436 ms
+ Execution Time: 814.002 ms
+(38 rows)
+
+
+@@@ v10000000.create_composite_idx
+--- SQL
+CREATE INDEX idx_events_user_created ON events(user_id, created_at DESC);
+--- OUT
+
+@@@ v10000000.t7_index
+--- SQL
+EXPLAIN (ANALYZE, BUFFERS)
+SELECT * FROM events WHERE user_id = 123 ORDER BY created_at DESC LIMIT 100;
+--- OUT
+                                                                   QUERY PLAN                                                                    
+-------------------------------------------------------------------------------------------------------------------------------------------------
+ Limit  (cost=396.61..396.86 rows=99 width=54) (actual time=0.519..0.541 rows=84.00 loops=1)
+   Buffers: shared hit=93
+   ->  Sort  (cost=396.61..396.86 rows=99 width=54) (actual time=0.517..0.526 rows=84.00 loops=1)
+         Sort Key: created_at DESC
+         Sort Method: quicksort  Memory: 36kB
+         Buffers: shared hit=93
+         ->  Bitmap Heap Scan on events  (cost=5.20..393.33 rows=99 width=54) (actual time=0.067..0.433 rows=84.00 loops=1)
+               Recheck Cond: (user_id = 123)
+               Heap Blocks: exact=84
+               Buffers: shared hit=90
+               ->  Bitmap Index Scan on idx_events_user_created  (cost=0.00..5.18 rows=99 width=0) (actual time=0.035..0.035 rows=84.00 loops=1)
+                     Index Cond: (user_id = 123)
+                     Index Searches: 1
+                     Buffers: shared hit=6
+ Planning:
+   Buffers: shared hit=143
+ Planning Time: 1.117 ms
+ Execution Time: 0.640 ms
+(18 rows)
+
+
+@@@ v10000000.index_sizes
+--- SQL
+SELECT indexrelname AS index_name,
+       pg_size_pretty(pg_relation_size(indexrelid)) AS index_size
+FROM pg_stat_user_indexes
+WHERE schemaname='krasova_lab2' AND relname='events'
+ORDER BY pg_relation_size(indexrelid) DESC;
+--- OUT
+       index_name        | index_size 
+-------------------------+------------
+ idx_events_user_created | 301 MB
+ idx_events_created_at   | 214 MB
+ events_pkey             | 214 MB
+ idx_events_user_id      | 68 MB
+(4 rows)
+
+

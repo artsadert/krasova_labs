@@ -1,0 +1,36 @@
+@@@ t9.write_cost
+--- SQL
+-- вставка 500000 строк при разном числе индексов
+INSERT INTO events_write_test (user_id, event_type, payload, created_at)
+SELECT
+    (random() * 100000)::bigint,
+    CASE
+        WHEN random() < 0.4 THEN 'MESSAGE'
+        WHEN random() < 0.7 THEN 'LOGIN'
+        WHEN random() < 0.9 THEN 'PURCHASE'
+        ELSE 'OTHER'
+    END,
+    jsonb_build_object('source', (ARRAY['web','ios','android'])[1 + (i % 3)]),
+    NOW() - (random() * INTERVAL '365 days')
+FROM generate_series(1, 500000) AS i;
+--- OUT
+набор индексов                              время, мс размер табл.
+только PK (0 вторичных индексов)          2116        52 MB
+PK + idx_events_user_id                                          3251        60 MB
+PK + user_id + created_at                                        4502        74 MB
+PK + user_id + created_at + (user_id, created_at DESC)           6264        93 MB
+
+@@@ t9.index_sizes
+--- SQL
+SELECT indexrelname, pg_size_pretty(pg_relation_size(indexrelid)) AS index_size
+FROM pg_stat_user_indexes WHERE relname = 'events_write_test'
+ORDER BY pg_relation_size(indexrelid) DESC;
+--- OUT
+      indexrelname      | index_size 
+------------------------+------------
+ idx_wt_user_created    | 19 MB
+ idx_wt_created_at      | 15 MB
+ events_write_test_pkey | 11 MB
+ idx_wt_user_id         | 8232 kB
+(4 rows)
+

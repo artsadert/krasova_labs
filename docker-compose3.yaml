@@ -1,0 +1,96 @@
+services:
+  postgres:
+    container_name: database_postgres
+    build:
+      context: .
+    environment:
+      POSTGRES_USER: ${DB_USERNAME?error} 
+      POSTGRES_PASSWORD: ${DB_PASSWORD?error}
+      POSTGRES_DB: ${DB_DATABASE?error} 
+    # pg_cron загружается только через shared_preload_libraries, то есть
+    # на старте сервера; cron.database_name указывает, в какой базе кластера
+    # живёт расширение и его расписание.
+    command:
+      - postgres
+      - -c
+      - shared_preload_libraries=pg_cron
+      - -c
+      - cron.database_name=${DB_DATABASE:-postgres}
+    ports:
+      - "5432:5432"
+    volumes:
+      # ВАЖНО: том монтируется туда, где кластер действительно хранит данные
+      # (PGDATA=/var/lib/postgresql/18/docker). Раньше здесь было
+      # /var/lib/database_postgres/data — путь, к PGDATA отношения не имеющий,
+      # поэтому данные жили в слое контейнера и пропадали при пересоздании.
+      #
+      # Том называется pgdata, а не postgres: в старом томе postgres лежит
+      # кластер PostgreSQL 17 от прежней версии проекта, и сервер 18 его
+      # просто не запустит. Старый том намеренно оставлен нетронутым.
+      - pgdata:/var/lib/postgresql
+    networks:
+      - postgres
+    restart: always
+
+  pgadmin:
+      container_name: database_pgadmin
+      image: dpage/pgadmin4:9.0
+
+      depends_on:
+          - postgres 
+
+      environment:
+          PGADMIN_DEFAULT_EMAIL: ${PGADMIN_DEFAULT_EMAIL}
+          PGADMIN_DEFAULT_PASSWORD: ${PGADMIN_DEFAULT_PASSWORD}
+
+      ports:
+          - ${PGADMIN_PORT:-5050}:80
+
+      networks:
+          - postgres
+
+      restart: unless-stopped
+
+
+  partition_alerts:
+      container_name: database_partition_alerts
+      build:
+          context: ./lab3/jobs
+
+      depends_on:
+          - postgres
+
+      # Токены и пароли берутся из .env и не попадают ни в compose, ни в образ.
+      env_file:
+          - ./.env
+
+      environment:
+          PGHOST: postgres          # включает сетевой режим вместо docker exec
+          PGPORT: 5432
+          WATCH: "krasova_lab3:events:day:3,carrent_lab3:rentals:month:2"
+          # Партиции создаёт pg_cron внутри СУБД, поэтому внешняя job молчит.
+          # За контейнером остаётся контроль горизонта и доставка уведомлений
+          # из outbox — HTTP-клиента у PostgreSQL нет.
+          USE_PG_CRON: "true"
+          JOB_INTERVAL: ${JOB_INTERVAL:-3600}
+          CHECK_INTERVAL: ${CHECK_INTERVAL:-300}
+          RELAY_INTERVAL: ${RELAY_INTERVAL:-60}
+
+      volumes:
+          - partition_state:/state
+
+      networks:
+          - postgres
+
+      restart: unless-stopped
+
+
+networks:
+  postgres:
+    driver: bridge
+
+
+volumes:
+  pgdata:            # кластер PostgreSQL 18 (актуальный)
+  postgres:          # старый кластер PostgreSQL 17, не используется, оставлен как есть
+  partition_state:

@@ -1,0 +1,519 @@
+@@@ b100000.size
+--- SQL
+SELECT count(*) AS rows,
+       pg_size_pretty(pg_relation_size('rentals'))       AS table_size,
+       pg_size_pretty(pg_total_relation_size('rentals')) AS total_size
+FROM rentals;
+--- OUT
+  rows  | table_size | total_size 
+--------+------------+------------
+ 100000 | 9008 kB    | 11 MB
+(1 row)
+
+
+@@@ b100000.q1_baseline
+--- SQL
+EXPLAIN (ANALYZE, BUFFERS)
+SELECT * FROM rentals WHERE user_id = 123;
+--- OUT
+                                               QUERY PLAN                                               
+--------------------------------------------------------------------------------------------------------
+ Seq Scan on rentals  (cost=0.00..2376.00 rows=1 width=62) (actual time=6.495..6.496 rows=0.00 loops=1)
+   Filter: (user_id = 123)
+   Rows Removed by Filter: 100000
+   Buffers: shared hit=1126
+ Planning:
+   Buffers: shared hit=78
+ Planning Time: 0.314 ms
+ Execution Time: 6.553 ms
+(8 rows)
+
+
+@@@ b100000.q2_baseline
+--- SQL
+EXPLAIN (ANALYZE, BUFFERS)
+SELECT * FROM rentals
+WHERE created_at >= NOW() - INTERVAL '7 days' AND created_at < NOW();
+--- OUT
+                                                  QUERY PLAN                                                   
+---------------------------------------------------------------------------------------------------------------
+ Seq Scan on rentals  (cost=0.00..3376.00 rows=1974 width=62) (actual time=0.035..26.298 rows=1899.00 loops=1)
+   Filter: ((created_at < now()) AND (created_at >= (now() - '7 days'::interval)))
+   Rows Removed by Filter: 98101
+   Buffers: shared hit=1126
+ Planning:
+   Buffers: shared hit=81
+ Planning Time: 0.726 ms
+ Execution Time: 26.467 ms
+(8 rows)
+
+
+@@@ b100000.q3_baseline
+--- SQL
+EXPLAIN (ANALYZE, BUFFERS)
+SELECT * FROM rentals WHERE user_id = 123 ORDER BY created_at DESC LIMIT 50;
+--- OUT
+                                                      QUERY PLAN                                                      
+----------------------------------------------------------------------------------------------------------------------
+ Limit  (cost=2376.01..2376.02 rows=1 width=62) (actual time=11.979..11.981 rows=0.00 loops=1)
+   Buffers: shared hit=1129
+   ->  Sort  (cost=2376.01..2376.02 rows=1 width=62) (actual time=11.976..11.977 rows=0.00 loops=1)
+         Sort Key: created_at DESC
+         Sort Method: quicksort  Memory: 25kB
+         Buffers: shared hit=1129
+         ->  Seq Scan on rentals  (cost=0.00..2376.00 rows=1 width=62) (actual time=11.931..11.932 rows=0.00 loops=1)
+               Filter: (user_id = 123)
+               Rows Removed by Filter: 100000
+               Buffers: shared hit=1126
+ Planning:
+   Buffers: shared hit=103
+ Planning Time: 0.812 ms
+ Execution Time: 12.086 ms
+(14 rows)
+
+
+@@@ b100000.create_indexes
+--- SQL
+CREATE INDEX idx_rentals_user_created ON rentals(user_id, created_at DESC);
+CREATE INDEX idx_rentals_created_at ON rentals(created_at);
+--- OUT
+
+@@@ b100000.q1_indexed
+--- SQL
+EXPLAIN (ANALYZE, BUFFERS)
+SELECT * FROM rentals WHERE user_id = 123;
+--- OUT
+                                                              QUERY PLAN                                                              
+--------------------------------------------------------------------------------------------------------------------------------------
+ Index Scan using idx_rentals_user_created on rentals  (cost=0.42..8.44 rows=1 width=62) (actual time=0.025..0.025 rows=0.00 loops=1)
+   Index Cond: (user_id = 123)
+   Index Searches: 1
+   Buffers: shared hit=6
+ Planning:
+   Buffers: shared hit=114
+ Planning Time: 0.532 ms
+ Execution Time: 0.106 ms
+(8 rows)
+
+
+@@@ b100000.q2_indexed
+--- SQL
+EXPLAIN (ANALYZE, BUFFERS)
+SELECT * FROM rentals
+WHERE created_at >= NOW() - INTERVAL '7 days' AND created_at < NOW();
+--- OUT
+                                                               QUERY PLAN                                                                
+-----------------------------------------------------------------------------------------------------------------------------------------
+ Bitmap Heap Scan on rentals  (cost=44.64..1245.69 rows=1984 width=62) (actual time=0.412..2.255 rows=1899.00 loops=1)
+   Recheck Cond: ((created_at >= (now() - '7 days'::interval)) AND (created_at < now()))
+   Heap Blocks: exact=903
+   Buffers: shared hit=910
+   ->  Bitmap Index Scan on idx_rentals_created_at  (cost=0.00..44.14 rows=1984 width=0) (actual time=0.258..0.258 rows=1899.00 loops=1)
+         Index Cond: ((created_at >= (now() - '7 days'::interval)) AND (created_at < now()))
+         Index Searches: 1
+         Buffers: shared hit=7
+ Planning:
+   Buffers: shared hit=126
+ Planning Time: 0.554 ms
+ Execution Time: 2.399 ms
+(12 rows)
+
+
+@@@ b100000.q3_indexed
+--- SQL
+EXPLAIN (ANALYZE, BUFFERS)
+SELECT * FROM rentals WHERE user_id = 123 ORDER BY created_at DESC LIMIT 50;
+--- OUT
+                                                                 QUERY PLAN                                                                 
+--------------------------------------------------------------------------------------------------------------------------------------------
+ Limit  (cost=0.42..8.44 rows=1 width=62) (actual time=0.043..0.044 rows=0.00 loops=1)
+   Buffers: shared hit=6
+   ->  Index Scan using idx_rentals_user_created on rentals  (cost=0.42..8.44 rows=1 width=62) (actual time=0.041..0.041 rows=0.00 loops=1)
+         Index Cond: (user_id = 123)
+         Index Searches: 1
+         Buffers: shared hit=6
+ Planning:
+   Buffers: shared hit=138
+ Planning Time: 0.937 ms
+ Execution Time: 0.134 ms
+(10 rows)
+
+
+@@@ b100000.index_sizes
+--- SQL
+SELECT indexrelname AS index_name,
+       pg_size_pretty(pg_relation_size(indexrelid)) AS index_size
+FROM pg_stat_user_indexes
+WHERE schemaname='carrent_lab2' AND relname='rentals'
+ORDER BY pg_relation_size(indexrelid) DESC;
+--- OUT
+        index_name        | index_size 
+--------------------------+------------
+ idx_rentals_user_created | 3104 kB
+ rentals_pkey             | 2208 kB
+ idx_rentals_created_at   | 2208 kB
+(3 rows)
+
+
+@@@ b1000000.size
+--- SQL
+SELECT count(*) AS rows,
+       pg_size_pretty(pg_relation_size('rentals'))       AS table_size,
+       pg_size_pretty(pg_total_relation_size('rentals')) AS total_size
+FROM rentals;
+--- OUT
+  rows   | table_size | total_size 
+---------+------------+------------
+ 1000000 | 88 MB      | 109 MB
+(1 row)
+
+
+@@@ b1000000.q1_baseline
+--- SQL
+EXPLAIN (ANALYZE, BUFFERS)
+SELECT * FROM rentals WHERE user_id = 123;
+--- OUT
+                                                        QUERY PLAN                                                        
+--------------------------------------------------------------------------------------------------------------------------
+ Gather  (cost=1000.00..17466.93 rows=6 width=62) (actual time=32.757..37.571 rows=4.00 loops=1)
+   Workers Planned: 2
+   Workers Launched: 2
+   Buffers: shared hit=11258
+   ->  Parallel Seq Scan on rentals  (cost=0.00..16466.33 rows=2 width=62) (actual time=21.594..29.495 rows=1.33 loops=3)
+         Filter: (user_id = 123)
+         Rows Removed by Filter: 333332
+         Buffers: shared hit=11258
+ Planning:
+   Buffers: shared hit=78
+ Planning Time: 0.329 ms
+ Execution Time: 37.641 ms
+(12 rows)
+
+
+@@@ b1000000.q2_baseline
+--- SQL
+EXPLAIN (ANALYZE, BUFFERS)
+SELECT * FROM rentals
+WHERE created_at >= NOW() - INTERVAL '7 days' AND created_at < NOW();
+--- OUT
+                                                          QUERY PLAN                                                           
+-------------------------------------------------------------------------------------------------------------------------------
+ Gather  (cost=1000.00..23547.10 rows=19141 width=62) (actual time=0.387..75.687 rows=19107.00 loops=1)
+   Workers Planned: 2
+   Workers Launched: 2
+   Buffers: shared hit=11258
+   ->  Parallel Seq Scan on rentals  (cost=0.00..20633.00 rows=7975 width=62) (actual time=0.054..67.522 rows=6369.00 loops=3)
+         Filter: ((created_at < now()) AND (created_at >= (now() - '7 days'::interval)))
+         Rows Removed by Filter: 326964
+         Buffers: shared hit=11258
+ Planning:
+   Buffers: shared hit=81
+ Planning Time: 0.450 ms
+ Execution Time: 76.525 ms
+(12 rows)
+
+
+@@@ b1000000.q3_baseline
+--- SQL
+EXPLAIN (ANALYZE, BUFFERS)
+SELECT * FROM rentals WHERE user_id = 123 ORDER BY created_at DESC LIMIT 50;
+--- OUT
+                                                              QUERY PLAN                                                              
+--------------------------------------------------------------------------------------------------------------------------------------
+ Limit  (cost=17466.37..17466.95 rows=5 width=62) (actual time=33.695..37.854 rows=4.00 loops=1)
+   Buffers: shared hit=11334
+   ->  Gather Merge  (cost=17466.37..17466.95 rows=5 width=62) (actual time=33.692..37.849 rows=4.00 loops=1)
+         Workers Planned: 2
+         Workers Launched: 2
+         Buffers: shared hit=11334
+         ->  Sort  (cost=16466.34..16466.35 rows=2 width=62) (actual time=30.074..30.076 rows=1.33 loops=3)
+               Sort Key: created_at DESC
+               Sort Method: quicksort  Memory: 25kB
+               Buffers: shared hit=11334
+               Worker 0:  Sort Method: quicksort  Memory: 25kB
+               Worker 1:  Sort Method: quicksort  Memory: 25kB
+               ->  Parallel Seq Scan on rentals  (cost=0.00..16466.33 rows=2 width=62) (actual time=18.287..29.968 rows=1.33 loops=3)
+                     Filter: (user_id = 123)
+                     Rows Removed by Filter: 333332
+                     Buffers: shared hit=11258
+ Planning:
+   Buffers: shared hit=103
+ Planning Time: 0.503 ms
+ Execution Time: 37.943 ms
+(20 rows)
+
+
+@@@ b1000000.create_indexes
+--- SQL
+CREATE INDEX idx_rentals_user_created ON rentals(user_id, created_at DESC);
+CREATE INDEX idx_rentals_created_at ON rentals(created_at);
+--- OUT
+
+@@@ b1000000.q1_indexed
+--- SQL
+EXPLAIN (ANALYZE, BUFFERS)
+SELECT * FROM rentals WHERE user_id = 123;
+--- OUT
+                                                             QUERY PLAN                                                             
+------------------------------------------------------------------------------------------------------------------------------------
+ Bitmap Heap Scan on rentals  (cost=4.47..28.13 rows=6 width=62) (actual time=0.076..0.113 rows=4.00 loops=1)
+   Recheck Cond: (user_id = 123)
+   Heap Blocks: exact=4
+   Buffers: shared hit=10
+   ->  Bitmap Index Scan on idx_rentals_user_created  (cost=0.00..4.47 rows=6 width=0) (actual time=0.055..0.055 rows=4.00 loops=1)
+         Index Cond: (user_id = 123)
+         Index Searches: 1
+         Buffers: shared hit=6
+ Planning:
+   Buffers: shared hit=114
+ Planning Time: 0.638 ms
+ Execution Time: 0.214 ms
+(12 rows)
+
+
+@@@ b1000000.q2_indexed
+--- SQL
+EXPLAIN (ANALYZE, BUFFERS)
+SELECT * FROM rentals
+WHERE created_at >= NOW() - INTERVAL '7 days' AND created_at < NOW();
+--- OUT
+                                                                 QUERY PLAN                                                                 
+--------------------------------------------------------------------------------------------------------------------------------------------
+ Bitmap Heap Scan on rentals  (cost=409.65..12462.79 rows=19241 width=62) (actual time=5.536..21.017 rows=19107.00 loops=1)
+   Recheck Cond: ((created_at >= (now() - '7 days'::interval)) AND (created_at < now()))
+   Heap Blocks: exact=9209
+   Buffers: shared hit=9264
+   ->  Bitmap Index Scan on idx_rentals_created_at  (cost=0.00..404.84 rows=19241 width=0) (actual time=3.355..3.356 rows=19107.00 loops=1)
+         Index Cond: ((created_at >= (now() - '7 days'::interval)) AND (created_at < now()))
+         Index Searches: 1
+         Buffers: shared hit=55
+ Planning:
+   Buffers: shared hit=128
+ Planning Time: 0.785 ms
+ Execution Time: 22.245 ms
+(12 rows)
+
+
+@@@ b1000000.q3_indexed
+--- SQL
+EXPLAIN (ANALYZE, BUFFERS)
+SELECT * FROM rentals WHERE user_id = 123 ORDER BY created_at DESC LIMIT 50;
+--- OUT
+                                                                   QUERY PLAN                                                                   
+------------------------------------------------------------------------------------------------------------------------------------------------
+ Limit  (cost=28.21..28.22 rows=6 width=62) (actual time=0.098..0.100 rows=4.00 loops=1)
+   Buffers: shared hit=13
+   ->  Sort  (cost=28.21..28.22 rows=6 width=62) (actual time=0.096..0.098 rows=4.00 loops=1)
+         Sort Key: created_at DESC
+         Sort Method: quicksort  Memory: 25kB
+         Buffers: shared hit=13
+         ->  Bitmap Heap Scan on rentals  (cost=4.47..28.13 rows=6 width=62) (actual time=0.037..0.068 rows=4.00 loops=1)
+               Recheck Cond: (user_id = 123)
+               Heap Blocks: exact=4
+               Buffers: shared hit=10
+               ->  Bitmap Index Scan on idx_rentals_user_created  (cost=0.00..4.47 rows=6 width=0) (actual time=0.019..0.019 rows=4.00 loops=1)
+                     Index Cond: (user_id = 123)
+                     Index Searches: 1
+                     Buffers: shared hit=6
+ Planning:
+   Buffers: shared hit=138
+ Planning Time: 0.566 ms
+ Execution Time: 0.158 ms
+(18 rows)
+
+
+@@@ b1000000.index_sizes
+--- SQL
+SELECT indexrelname AS index_name,
+       pg_size_pretty(pg_relation_size(indexrelid)) AS index_size
+FROM pg_stat_user_indexes
+WHERE schemaname='carrent_lab2' AND relname='rentals'
+ORDER BY pg_relation_size(indexrelid) DESC;
+--- OUT
+        index_name        | index_size 
+--------------------------+------------
+ idx_rentals_user_created | 30 MB
+ rentals_pkey             | 21 MB
+ idx_rentals_created_at   | 21 MB
+(3 rows)
+
+
+@@@ b5000000.size
+--- SQL
+SELECT count(*) AS rows,
+       pg_size_pretty(pg_relation_size('rentals'))       AS table_size,
+       pg_size_pretty(pg_total_relation_size('rentals')) AS total_size
+FROM rentals;
+--- OUT
+  rows   | table_size | total_size 
+---------+------------+------------
+ 5000000 | 440 MB     | 547 MB
+(1 row)
+
+
+@@@ b5000000.q1_baseline
+--- SQL
+EXPLAIN (ANALYZE, BUFFERS)
+SELECT * FROM rentals WHERE user_id = 123;
+--- OUT
+                                                         QUERY PLAN                                                          
+-----------------------------------------------------------------------------------------------------------------------------
+ Gather  (cost=1000.00..83334.49 rows=26 width=62) (actual time=37.950..149.773 rows=32.00 loops=1)
+   Workers Planned: 2
+   Workers Launched: 2
+   Buffers: shared hit=15714 read=40576 written=73
+   ->  Parallel Seq Scan on rentals  (cost=0.00..82331.89 rows=11 width=62) (actual time=19.571..139.398 rows=10.67 loops=3)
+         Filter: (user_id = 123)
+         Rows Removed by Filter: 1666656
+         Buffers: shared hit=15714 read=40576 written=73
+ Planning:
+   Buffers: shared hit=78
+ Planning Time: 0.679 ms
+ Execution Time: 149.912 ms
+(12 rows)
+
+
+@@@ b5000000.q2_baseline
+--- SQL
+EXPLAIN (ANALYZE, BUFFERS)
+SELECT * FROM rentals
+WHERE created_at >= NOW() - INTERVAL '7 days' AND created_at < NOW();
+--- OUT
+                                                            QUERY PLAN                                                             
+-----------------------------------------------------------------------------------------------------------------------------------
+ Gather  (cost=1000.00..113248.09 rows=90827 width=62) (actual time=5.288..338.528 rows=95825.00 loops=1)
+   Workers Planned: 2
+   Workers Launched: 2
+   Buffers: shared hit=15740 read=40550 written=62
+   ->  Parallel Seq Scan on rentals  (cost=0.00..103165.39 rows=37845 width=62) (actual time=4.943..306.697 rows=31941.67 loops=3)
+         Filter: ((created_at < now()) AND (created_at >= (now() - '7 days'::interval)))
+         Rows Removed by Filter: 1634725
+         Buffers: shared hit=15740 read=40550 written=62
+ Planning:
+   Buffers: shared hit=81
+ Planning Time: 0.581 ms
+ JIT:
+   Functions: 6
+   Options: Inlining false, Optimization false, Expressions true, Deforming true
+   Timing: Generation 1.191 ms (Deform 0.291 ms), Inlining 0.000 ms, Optimization 1.042 ms, Emission 12.567 ms, Total 14.800 ms
+ Execution Time: 365.568 ms
+(16 rows)
+
+
+@@@ b5000000.q3_baseline
+--- SQL
+EXPLAIN (ANALYZE, BUFFERS)
+SELECT * FROM rentals WHERE user_id = 123 ORDER BY created_at DESC LIMIT 50;
+--- OUT
+                                                               QUERY PLAN                                                                
+-----------------------------------------------------------------------------------------------------------------------------------------
+ Limit  (cost=83332.10..83335.13 rows=26 width=62) (actual time=146.814..151.323 rows=32.00 loops=1)
+   Buffers: shared hit=15822 read=40544 written=65
+   ->  Gather Merge  (cost=83332.10..83335.13 rows=26 width=62) (actual time=146.812..151.317 rows=32.00 loops=1)
+         Workers Planned: 2
+         Workers Launched: 2
+         Buffers: shared hit=15822 read=40544 written=65
+         ->  Sort  (cost=82332.08..82332.10 rows=11 width=62) (actual time=143.673..143.675 rows=10.67 loops=3)
+               Sort Key: created_at DESC
+               Sort Method: quicksort  Memory: 26kB
+               Buffers: shared hit=15822 read=40544 written=65
+               Worker 0:  Sort Method: quicksort  Memory: 26kB
+               Worker 1:  Sort Method: quicksort  Memory: 26kB
+               ->  Parallel Seq Scan on rentals  (cost=0.00..82331.89 rows=11 width=62) (actual time=19.804..143.578 rows=10.67 loops=3)
+                     Filter: (user_id = 123)
+                     Rows Removed by Filter: 1666656
+                     Buffers: shared hit=15746 read=40544 written=65
+ Planning:
+   Buffers: shared hit=103
+ Planning Time: 0.580 ms
+ Execution Time: 151.425 ms
+(20 rows)
+
+
+@@@ b5000000.create_indexes
+--- SQL
+CREATE INDEX idx_rentals_user_created ON rentals(user_id, created_at DESC);
+CREATE INDEX idx_rentals_created_at ON rentals(created_at);
+--- OUT
+
+@@@ b5000000.q1_indexed
+--- SQL
+EXPLAIN (ANALYZE, BUFFERS)
+SELECT * FROM rentals WHERE user_id = 123;
+--- OUT
+                                                              QUERY PLAN                                                              
+--------------------------------------------------------------------------------------------------------------------------------------
+ Bitmap Heap Scan on rentals  (cost=4.63..107.28 rows=26 width=62) (actual time=0.112..0.324 rows=32.00 loops=1)
+   Recheck Cond: (user_id = 123)
+   Heap Blocks: exact=32
+   Buffers: shared hit=38
+   ->  Bitmap Index Scan on idx_rentals_user_created  (cost=0.00..4.63 rows=26 width=0) (actual time=0.091..0.092 rows=32.00 loops=1)
+         Index Cond: (user_id = 123)
+         Index Searches: 1
+         Buffers: shared hit=6
+ Planning:
+   Buffers: shared hit=114
+ Planning Time: 0.818 ms
+ Execution Time: 0.434 ms
+(12 rows)
+
+
+@@@ b5000000.q2_indexed
+--- SQL
+EXPLAIN (ANALYZE, BUFFERS)
+SELECT * FROM rentals
+WHERE created_at >= NOW() - INTERVAL '7 days' AND created_at < NOW();
+--- OUT
+                                                                  QUERY PLAN                                                                   
+-----------------------------------------------------------------------------------------------------------------------------------------------
+ Bitmap Heap Scan on rentals  (cost=1940.52..62518.45 rows=91325 width=62) (actual time=24.602..107.128 rows=95824.00 loops=1)
+   Recheck Cond: ((created_at >= (now() - '7 days'::interval)) AND (created_at < now()))
+   Heap Blocks: exact=46222
+   Buffers: shared hit=2 read=46485 written=275
+   ->  Bitmap Index Scan on idx_rentals_created_at  (cost=0.00..1917.69 rows=91325 width=0) (actual time=14.667..14.668 rows=95824.00 loops=1)
+         Index Cond: ((created_at >= (now() - '7 days'::interval)) AND (created_at < now()))
+         Index Searches: 1
+         Buffers: shared hit=2 read=263
+ Planning:
+   Buffers: shared hit=114 read=14
+ Planning Time: 1.443 ms
+ Execution Time: 111.394 ms
+(12 rows)
+
+
+@@@ b5000000.q3_indexed
+--- SQL
+EXPLAIN (ANALYZE, BUFFERS)
+SELECT * FROM rentals WHERE user_id = 123 ORDER BY created_at DESC LIMIT 50;
+--- OUT
+                                                                   QUERY PLAN                                                                   
+------------------------------------------------------------------------------------------------------------------------------------------------
+ Limit  (cost=0.43..108.88 rows=26 width=62) (actual time=0.039..0.167 rows=32.00 loops=1)
+   Buffers: shared hit=38
+   ->  Index Scan using idx_rentals_user_created on rentals  (cost=0.43..108.88 rows=26 width=62) (actual time=0.037..0.161 rows=32.00 loops=1)
+         Index Cond: (user_id = 123)
+         Index Searches: 1
+         Buffers: shared hit=38
+ Planning:
+   Buffers: shared hit=138
+ Planning Time: 0.710 ms
+ Execution Time: 0.238 ms
+(10 rows)
+
+
+@@@ b5000000.index_sizes
+--- SQL
+SELECT indexrelname AS index_name,
+       pg_size_pretty(pg_relation_size(indexrelid)) AS index_size
+FROM pg_stat_user_indexes
+WHERE schemaname='carrent_lab2' AND relname='rentals'
+ORDER BY pg_relation_size(indexrelid) DESC;
+--- OUT
+        index_name        | index_size 
+--------------------------+------------
+ idx_rentals_user_created | 150 MB
+ idx_rentals_created_at   | 107 MB
+ rentals_pkey             | 107 MB
+(3 rows)
+
+

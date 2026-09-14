@@ -1,0 +1,17 @@
+# Ночная эксплуатация партиций. Установка: crontab -e
+#
+# Секретов здесь НЕТ и быть не должно: crontab читается любым процессом
+# пользователя. Токены и пароли лежат в .env проекта, который job подхватывает
+# сама (jobs/env_file.py). Здесь задаются только несекретные параметры.
+
+LAB3=/home/multivader/programs/databases/lab3/jobs
+
+# 01:00 — создать недостающие суточные партиции events на 3 дня вперёд
+0 1 * * * cd $LAB3 && /usr/bin/python3 create_partitions_job.py --table events --horizon 3 >> /var/log/partitions.log 2>&1
+
+# 01:10 — то же для помесячных партиций rentals на 2 месяца вперёд
+10 1 * * * cd $LAB3 && LAB_SCHEMA=carrent_lab3 /usr/bin/python3 create_partitions_job.py --table rentals --granularity month --horizon 2 >> /var/log/partitions.log 2>&1
+
+# Каждые 15 минут — контроль состояния; alert уходит только при смене состояния
+*/15 * * * * cd $LAB3 && /usr/bin/python3 partition_health_check.py --table events --horizon 3 >> /var/log/partitions.log 2>&1
+*/15 * * * * cd $LAB3 && LAB_SCHEMA=carrent_lab3 PARTITION_STATE_FILE=$LAB3/alert_state_carrent.json /usr/bin/python3 partition_health_check.py --table rentals --granularity month --horizon 2 >> /var/log/partitions.log 2>&1
