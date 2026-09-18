@@ -1,0 +1,12 @@
+2026/09/17 14:17:57 migrations applied
+2026/09/17 14:17:57 metrics listening on :9095
+2026/09/17 14:17:57 REST UserService listening on :8082
+2026/09/17 14:17:57 gRPC UserService listening on :50052
+[GIN] 2026/09/17 - 14:18:13 | 200 |      37.581µs |       127.0.0.1 | GET      "/healthz"
+[GIN] 2026/09/17 - 14:18:13 | 400 |     309.507µs |       127.0.0.1 | POST     "/v1/drivers"
+[GIN] 2026/09/17 - 14:18:13 | 201 |    4.310211ms |       127.0.0.1 | POST     "/v1/riders"
+[GIN] 2026/09/17 - 14:18:24 | 201 |     5.97739ms |       127.0.0.1 | POST     "/v1/drivers"
+[GIN] 2026/09/17 - 14:18:24 | 200 |     1.09526ms |       127.0.0.1 | GET      "/v1/drivers/81d7024f-d32c-4411-b8d2-0c0b81e2fb30"
+[GIN] 2026/09/17 - 14:18:24 | 200 |    2.056942ms |       127.0.0.1 | PUT      "/v1/drivers/81d7024f-d32c-4411-b8d2-0c0b81e2fb30/availability"
+[GIN] 2026/09/17 - 14:18:24 | 200 |     509.226µs |       127.0.0.1 | GET      "/v1/drivers/81d7024f-d32c-4411-b8d2-0c0b81e2fb30/availability"
+[GIN] 2026/09/17 - 14:18:24 | 200 |    4.317686ms |       127.0.0.1 | GET      "/v1/drivers?status=available&limit=5"
